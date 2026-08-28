@@ -1,0 +1,32 @@
+# Build outputs
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# .env — NEVER commit this
+.env
+
+# Piper binaries / models (downloaded at install time)
+piper/
+*.onnx
+*.onnx.json
+
+# NuGet
+*.nupkg
+packages/
+project.assets.json
+project.nuget.cache
+*.nuget.props
+*.nuget.targets
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+msfs-ai-atc-full-build-spec.md

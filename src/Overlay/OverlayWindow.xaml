@@ -1,0 +1,246 @@
+<Window x:Class="MsfsAiAtc.Overlay.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:MsfsAiAtc.Overlay"
+        Title="MSFS AI ATC"
+        Width="480" Height="360"
+        MinWidth="340" MinHeight="200"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="CanResizeWithGrip"
+        Left="20" Top="20">
+
+    <Window.Resources>
+        <!-- Color palette -->
+        <Color x:Key="BackgroundColor">#CC0A0E1A</Color>
+        <Color x:Key="AccentAmberColor">#FFCD8A</Color>
+        <Color x:Key="AccentBlueColor">#4DA6FF</Color>
+        <Color x:Key="TextPrimaryColor">#E8EAF6</Color>
+        <Color x:Key="TextSecondaryColor">#8899BB</Color>
+        <Color x:Key="PilotTextColor">#FFCD8A</Color>
+        <Color x:Key="AtcTextColor">#66BB8E</Color>
+        <Color x:Key="DangerColor">#FF5555</Color>
+
+        <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource BackgroundColor}"/>
+        <SolidColorBrush x:Key="AccentAmberBrush" Color="{StaticResource AccentAmberColor}"/>
+        <SolidColorBrush x:Key="AccentBlueBrush" Color="{StaticResource AccentBlueColor}"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimaryColor}"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}"/>
+        <SolidColorBrush x:Key="PilotTextBrush" Color="{StaticResource PilotTextColor}"/>
+        <SolidColorBrush x:Key="AtcTextBrush" Color="{StaticResource AtcTextColor}"/>
+
+        <!-- Fonts -->
+        <FontFamily x:Key="MonoFont">Cascadia Code, Consolas, Courier New</FontFamily>
+        <FontFamily x:Key="UiFont">Segoe UI, Arial</FontFamily>
+
+        <!-- Status dot style -->
+        <Style x:Key="StatusDot" TargetType="Ellipse">
+            <Setter Property="Width" Value="8"/>
+            <Setter Property="Height" Value="8"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+        </Style>
+
+        <!-- Chat message item template selector will be handled in code-behind -->
+    </Window.Resources>
+
+    <!-- Root border for rounded glass look -->
+    <Border CornerRadius="12"
+            Background="{StaticResource BackgroundBrush}"
+            BorderBrush="#334DA6FF"
+            BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" BlurRadius="24" ShadowDepth="0" Opacity="0.7"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>  <!-- Title bar -->
+                <RowDefinition Height="Auto"/>  <!-- Status bar -->
+                <RowDefinition Height="*"/>     <!-- Chat log -->
+                <RowDefinition Height="Auto"/>  <!-- PTT status footer -->
+            </Grid.RowDefinitions>
+
+            <!-- ═══ TITLE BAR (drag handle) ═════════════════════════════════ -->
+            <Border Grid.Row="0"
+                    Background="#1A1E2E"
+                    CornerRadius="12,12,0,0"
+                    MouseDown="TitleBar_MouseDown"
+                    Cursor="SizeAll">
+                <Grid Margin="12,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- App wordmark -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Amber accent bar -->
+                        <Border Width="3" Height="16" Background="{StaticResource AccentAmberBrush}"
+                                CornerRadius="2" Margin="0,0,8,0"/>
+                        <TextBlock Text="AI" FontFamily="{StaticResource UiFont}"
+                                   FontSize="13" FontWeight="Bold"
+                                   Foreground="{StaticResource AccentAmberBrush}"/>
+                        <TextBlock Text=" ATC" FontFamily="{StaticResource UiFont}"
+                                   FontSize="13" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimaryBrush}"/>
+                        <TextBlock x:Name="AirportLabel" Text=""
+                                   FontFamily="{StaticResource UiFont}"
+                                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Close button -->
+                    <Button Grid.Column="1" x:Name="CloseBtn" Content="✕"
+                            Background="Transparent" BorderThickness="0"
+                            Foreground="{StaticResource TextSecondaryBrush}"
+                            FontSize="12" Cursor="Hand"
+                            Click="CloseBtn_Click"
+                            Padding="6,0">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}"
+                                                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background" Value="#33FF5555"/>
+                                                    <Setter Property="Foreground" Value="#FF5555"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- ═══ STATUS BAR ══════════════════════════════════════════════ -->
+            <Border Grid.Row="1" Background="#0F121C" Padding="12,6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- SimConnect status -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="SimDot" Style="{StaticResource StatusDot}" Fill="#FF5555"/>
+                        <TextBlock x:Name="SimStatusText" Text="SIM: Disconnected"
+                                   FontFamily="{StaticResource UiFont}" FontSize="10"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </StackPanel>
+
+                    <!-- Separator -->
+                    <Rectangle Grid.Column="1" Width="1" Height="12" Fill="#33FFFFFF"
+                               Margin="10,0"/>
+
+                    <!-- Controller & Frequency -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="ControllerLabel" Text="Ground"
+                                   FontFamily="{StaticResource UiFont}" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource AccentBlueBrush}"/>
+                        <TextBlock x:Name="FreqLabel" Text=""
+                                   FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="6,0,0,0"/>
+                    </StackPanel>
+
+                    <!-- PTT key hint -->
+                    <TextBlock Grid.Column="3" x:Name="PttKeyHint" Text=""
+                               FontFamily="{StaticResource UiFont}" FontSize="10"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                </Grid>
+            </Border>
+
+            <!-- ═══ CHAT LOG ════════════════════════════════════════════════ -->
+            <Border Grid.Row="2" Background="Transparent" Padding="10,6">
+                <ScrollViewer x:Name="ChatScroll"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="True">
+                    <ItemsControl x:Name="ChatLog">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type local:ChatEntry}">
+                                <Grid Margin="0,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Prefix}"
+                                               FontFamily="{StaticResource MonoFont}"
+                                               FontSize="11" FontWeight="Bold"
+                                               Foreground="{Binding PrefixColor}"
+                                               Width="50" TextAlignment="Right"
+                                               Margin="0,0,8,0"
+                                               VerticalAlignment="Top"/>
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Text}"
+                                               FontFamily="{StaticResource UiFont}"
+                                               FontSize="12"
+                                               Foreground="{Binding TextColor}"
+                                               TextWrapping="Wrap"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <!-- ═══ PTT FOOTER ══════════════════════════════════════════════ -->
+            <Border Grid.Row="3"
+                    Background="#0F121C"
+                    CornerRadius="0,0,12,12"
+                    Padding="12,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- State label -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="StateDot" Width="10" Height="10" Margin="0,0,8,0">
+                            <Ellipse.Fill>
+                                <SolidColorBrush x:Name="StateDotBrush" Color="#334DA6FF"/>
+                            </Ellipse.Fill>
+                        </Ellipse>
+                        <TextBlock x:Name="StateLabel" Text="IDLE"
+                                   FontFamily="{StaticResource MonoFont}"
+                                   FontSize="11" FontWeight="Bold"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </StackPanel>
+
+                    <!-- PTT button indicator (visual only) -->
+                    <Border Grid.Column="1" x:Name="PttIndicator"
+                            CornerRadius="6" Padding="10,4"
+                            BorderThickness="1">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderBrush" Value="#334DA6FF"/>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock x:Name="PttLabel" Text="PTT"
+                                   FontFamily="{StaticResource MonoFont}"
+                                   FontSize="10" FontWeight="Bold"
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
