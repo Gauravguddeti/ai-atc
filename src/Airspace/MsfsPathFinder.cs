@@ -44,6 +44,32 @@ public class MsfsPathFinder
     /// </summary>
     public MsfsInstallPaths? Discover()
     {
+        // 1. Check for manual override in .env
+        var manualPath = Environment.GetEnvironmentVariable("MSFS_PACKAGES_PATH");
+        if (!string.IsNullOrWhiteSpace(manualPath) && Directory.Exists(manualPath))
+        {
+            _logger.LogInformation("Using manual MSFS packages path from .env: {Path}", manualPath);
+            // In manual mode, we assume LocalState is a sibling to Community/Official
+            // or inside the packages root.
+            var paths = new MsfsInstallPaths
+            {
+                Label = "Manual Override",
+                UserCfgOptPath = "Manual",
+                PackagesRoot = manualPath,
+                CommunityFolder = Path.Combine(manualPath, "Community"),
+                OfficialFolder = FindOfficialFolder(manualPath),
+                LocalStateFolder = FindLocalStateFolder(manualPath, manualPath) 
+            };
+            
+            // If LocalState isn't found easily, default to Packages root
+            if (!Directory.Exists(paths.LocalStateFolder))
+                paths = paths with { LocalStateFolder = manualPath };
+
+            Paths = paths;
+            return paths;
+        }
+
+        // 2. Scan standard UserCfg.opt locations
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
         foreach (var (label, relative) in _cfgCandidates)
