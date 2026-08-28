@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using MsfsAiAtc.Traffic;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -43,14 +44,23 @@ public class SimConnectBridge : IDisposable
     public event Action? Connected;
     public event Action? Disconnected;
 
+    /// <summary>Wire in the TrafficTracker so SimConnect can feed it AI object data.</summary>
+    public void SetTrafficTracker(TrafficTracker tracker) => _trafficTracker = tracker;
+
     // Expose current state (read-only snapshot)
     public SimState CurrentState => _state;
 
     // SimConnect definition IDs
-    private enum DefId { AircraftData = 1 }
-    private enum RequestId { Aircraft = 1, Facilities = 2 }
-    private enum EventId { OneSecond = 1 }
-    private enum GroupId { Standard = 1 }
+    private enum DefId     { AircraftData = 1, TrafficData = 2 }
+    private enum RequestId { Aircraft = 1, Facilities = 2, Traffic = 3 }
+    private enum EventId   { OneSecond = 1, FiveSecond = 2 }
+    private enum GroupId   { Standard = 1 }
+
+    // Traffic tracking
+    private TrafficTracker? _trafficTracker;
+
+    // SIMCONNECT_SIMOBJECT_TYPE_AIRCRAFT = 1
+    private const uint SIMOBJECT_TYPE_AIRCRAFT = 1;
 
     public SimConnectBridge(ILogger<SimConnectBridge> logger)
     {
@@ -147,8 +157,27 @@ public class SimConnectBridge : IDisposable
 
             sc.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
 
-            // Request data on 1-second intervals via sim event
+            // Traffic definition: position + callsign for each AI aircraft
+            void AddTrafficDef(string name, string units, int type) =>
+                sc.AddToDataDefinition(DefId.TrafficData, name, units, type, 0.0f, -1);
+
+            AddTrafficDef("PLANE LATITUDE",               "degrees",  8);
+            AddTrafficDef("PLANE LONGITUDE",              "degrees",  8);
+            AddTrafficDef("PLANE ALTITUDE",               "feet",     8);
+            AddTrafficDef("PLANE HEADING DEGREES TRUE",   "degrees",  8);
+            AddTrafficDef("GROUND VELOCITY",              "knots",    8);
+            AddTrafficDef("SIM ON GROUND",                "bool",     8);
+            AddTrafficDef("TITLE",             string.Empty, 6);  // 6 = SIMCONNECT_DATATYPE_STRING64
+            AddTrafficDef("ATC ID",             string.Empty, 5);  // 5 = SIMCONNECT_DATATYPE_STRING32
+            AddTrafficDef("ATC AIRLINE",        string.Empty, 5);
+            AddTrafficDef("ATC FLIGHT NUMBER",  string.Empty, 4);  // 4 = SIMCONNECT_DATATYPE_STRING8
+
+            sc.RegisterDataDefineStruct<TrafficObjectData>(DefId.TrafficData);
+
+            // Request own-ship data on 1-second intervals
             sc.SubscribeToSystemEvent(EventId.OneSecond, "1sec");
+            // Traffic scan on 5-second intervals (heavier call)
+            sc.SubscribeToSystemEvent(EventId.FiveSecond, "5sec");
         }
         catch (Exception ex)
         {
@@ -161,9 +190,10 @@ public class SimConnectBridge : IDisposable
         if (_simConnect == null) return;
         try
         {
-            _simConnect.OnRecvSimobjectData += new Action<dynamic, dynamic>(OnReceiveSimObjectData);
-            _simConnect.OnRecvEvent += new Action<dynamic, dynamic>(OnRecvEvent);
-            _simConnect.OnRecvQuit += new Action<dynamic, dynamic>(OnRecvQuit);
+            _simConnect.OnRecvSimobjectData        += new Action<dynamic, dynamic>(OnReceiveSimObjectData);
+            _simConnect.OnRecvSimobjectDataBytype  += new Action<dynamic, dynamic>(OnReceiveSimObjectDataBytype);
+            _simConnect.OnRecvEvent     += new Action<dynamic, dynamic>(OnRecvEvent);
+            _simConnect.OnRecvQuit      += new Action<dynamic, dynamic>(OnRecvQuit);
             _simConnect.OnRecvException += new Action<dynamic, dynamic>(OnRecvException);
         }
         catch (Exception ex)
@@ -176,12 +206,22 @@ public class SimConnectBridge : IDisposable
     {
         try
         {
-            if ((uint)data.uEventID == (uint)EventId.OneSecond)
+            uint evId = (uint)data.uEventID;
+
+            if (evId == (uint)EventId.OneSecond)
             {
-                // Request aircraft data update
+                // Request own-ship aircraft data
                 _simConnect?.RequestDataOnSimObject(
                     RequestId.Aircraft, DefId.AircraftData, 0,
                     0 /* SIMCONNECT_PERIOD_ONCE */, 0, 0, 0, 0);
+            }
+            else if (evId == (uint)EventId.FiveSecond)
+            {
+                // Request all nearby AI aircraft (radius = 40 km = 40000 m)
+                // SIMCONNECT_SIMOBJECT_TYPE_AIRCRAFT = 1
+                _simConnect?.RequestDataOnSimObjectType(
+                    RequestId.Traffic, DefId.TrafficData,
+                    40000u /* radius metres */, SIMOBJECT_TYPE_AIRCRAFT);
             }
         }
         catch { }
@@ -191,27 +231,64 @@ public class SimConnectBridge : IDisposable
     {
         try
         {
-            if (data.dwRequestID == (uint)RequestId.Aircraft)
+            uint reqId = (uint)data.dwRequestID;
+
+            if (reqId == (uint)RequestId.Aircraft)
             {
                 var d = (AircraftData)data.dwData[0];
-                _state.LatitudeDeg = d.Latitude;
-                _state.LongitudeDeg = d.Longitude;
-                _state.AltitudeMslFt = d.AltitudeMsl;
-                _state.AltitudeAglFt = d.AltitudeAgl;
+                _state.LatitudeDeg    = d.Latitude;
+                _state.LongitudeDeg   = d.Longitude;
+                _state.AltitudeMslFt  = d.AltitudeMsl;
+                _state.AltitudeAglFt  = d.AltitudeAgl;
                 _state.HeadingDegTrue = d.HeadingTrue;
                 _state.GroundSpeedKts = d.GroundSpeed;
-                _state.OnGround = d.SimOnGround > 0.5;
-                _state.Com1FreqMhz = d.Com1Freq;
-                _state.WindSpeedKts = d.WindSpeed;
+                _state.OnGround       = d.SimOnGround > 0.5;
+                _state.Com1FreqMhz    = d.Com1Freq;
+                _state.WindSpeedKts   = d.WindSpeed;
                 _state.WindDirectionDeg = d.WindDirection;
-                _state.SimTime = DateTime.UtcNow;
-                _state.LastUpdated = DateTime.UtcNow;
+                _state.SimTime        = DateTime.UtcNow;
+                _state.LastUpdated    = DateTime.UtcNow;
                 StateUpdated?.Invoke(_state);
             }
+            // Traffic responses come one aircraft at a time via OnRecvSimobjectDataBytype
         }
         catch (Exception ex)
         {
             _logger.LogDebug("Error processing SimConnect data: {Msg}", ex.Message);
+        }
+    }
+
+    // Traffic is returned by RequestDataOnSimObjectType — different callback
+    private readonly List<TrafficObjectData> _trafficBuffer = new();
+
+    private void OnReceiveSimObjectDataBytype(dynamic sender, dynamic data)
+    {
+        try
+        {
+            uint reqId     = (uint)data.dwRequestID;
+            uint entryNum  = (uint)data.dwentrynumber;
+            uint outOf     = (uint)data.dwoutof;
+
+            if (reqId != (uint)RequestId.Traffic) return;
+
+            if (entryNum == 1) _trafficBuffer.Clear(); // first entry = start of batch
+
+            var t = (TrafficObjectData)data.dwData[0];
+            _trafficBuffer.Add(t);
+
+            if (entryNum == outOf && _trafficTracker != null)
+            {
+                // Full batch received — update tracker
+                _trafficTracker.UpdateFromSimConnect(
+                    _trafficBuffer,
+                    _state.LatitudeDeg, _state.LongitudeDeg, _state.AltitudeMslFt);
+
+                _state.TrafficContext = _trafficTracker.GetContextSummary();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Error processing traffic data: {Msg}", ex.Message);
         }
     }
 

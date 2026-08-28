@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using MsfsAiAtc.Airspace;
 using MsfsAiAtc.Audio;
 using MsfsAiAtc.AtcBrain;
 using MsfsAiAtc.Config;
@@ -6,6 +7,7 @@ using MsfsAiAtc.Handoff;
 using MsfsAiAtc.Overlay;
 using MsfsAiAtc.SimBridge;
 using MsfsAiAtc.Speech;
+using MsfsAiAtc.Traffic;
 using MsfsAiAtc.Triggers;
 using System.Net.Http;
 using System.Windows;
@@ -33,6 +35,10 @@ public partial class App : Application
     private HandoffStateMachine _handoff = null!;
     private TriggerScheduler _triggers = null!;
     private OverlayWindow _overlay = null!;
+
+    // Phase 3 & 4
+    private AirspaceLookup _airspaceLookup = null!;
+    private TrafficTracker _trafficTracker = null!;
 
     private HttpClient _httpClient = null!;
     private CancellationTokenSource _appCts = new();
@@ -111,14 +117,70 @@ public partial class App : Application
 
         _overlay.AddSystemMessage($"PTT key: [{_config.PushToTalkKey}]  |  Piper: {(_piperTts.IsAvailable ? "Ready" : "Not found — install via setup")}");
 
+        // ── Phase 3 & 4: Airport database, flight plan, traffic ───────────────
+        InitialisePhase3And4();
+
         // Set main window
         MainWindow = _overlay;
+    }
+
+    // ─── Phase 3 & 4 initialisation ───────────────────────────────────────────
+
+    private void InitialisePhase3And4()
+    {
+        var logger = _loggerFactory.CreateLogger<App>();
+
+        // Traffic tracker (Phase 4)
+        _trafficTracker = new TrafficTracker(_loggerFactory.CreateLogger<TrafficTracker>());
+        _simBridge.SetTrafficTracker(_trafficTracker);
+
+        // Discover MSFS installation (runs fast — just reads one text file)
+        var pathFinder = new MsfsPathFinder(_loggerFactory.CreateLogger<MsfsPathFinder>());
+        var paths = pathFinder.Discover();
+
+        if (paths == null)
+        {
+            _overlay.AddSystemMessage("⚠ MSFS install not found — taxiway data unavailable");
+            _airspaceLookup = new AirspaceLookup(_loggerFactory.CreateLogger<AirspaceLookup>());
+            return;
+        }
+
+        // Flight plan reader (Phase 3)
+        var flightPlanReader = new FlightPlanReader(
+            _loggerFactory.CreateLogger<FlightPlanReader>(), paths.LocalStateFolder);
+
+        // Airport cache — BGL scan runs in the background; overlay shows progress
+        var appDataDir = System.IO.Path.Combine(
+            AppContext.BaseDirectory, "data");
+        var airportCache = new AirportCache(
+            _loggerFactory.CreateLogger<AirportCache>(), _loggerFactory, paths, appDataDir);
+
+        airportCache.ScanProgressUpdate += msg =>
+            Application.Current?.Dispatcher.Invoke(() => _overlay.AddSystemMessage($"🗺 {msg}"));
+
+        airportCache.ScanComplete += count =>
+            Application.Current?.Dispatcher.Invoke(() =>
+                _overlay.AddSystemMessage($"✓ Airport DB ready — {count} airports loaded"));
+
+        // Start BGL scan on background thread (doesn't block UI or PTT)
+        _ = airportCache.InitialiseAsync(_appCts.Token);
+
+        _airspaceLookup = new AirspaceLookup(
+            _loggerFactory.CreateLogger<AirspaceLookup>(),
+            airportCache,
+            flightPlanReader);
+
+        logger.LogInformation("Phase 3 & 4 services initialised");
     }
 
     // ─── Event handlers ───────────────────────────────────────────────────────
 
     private void OnSimStateUpdated(SimState state)
     {
+        // Update airspace context (flight plan + BGL layout) on every tick
+        // This is cheap — data is already in memory from the cache
+        state.AirspaceContext = _airspaceLookup.BuildContextString(state);
+
         _overlay.UpdateSimState(state);
         _handoff.Update(state);
         _triggers.UpdateState(state);
