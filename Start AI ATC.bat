@@ -2,16 +2,18 @@
 title MSFS AI ATC
 color 0A
 
-:: Find the built exe or use dotnet run as fallback
+:: Find the built exe (created by SETUP bat)
 set EXE=%~dp0bin\Release\net8.0-windows\MsfsAiAtc.exe
 
 if exist "%EXE%" (
     start "" "%EXE%"
-) else (
-    :: Fall back to dotnet run (works before first release build)
-    cd /d "%~dp0"
-    dotnet run --project MsfsAiAtc.csproj -c Release --no-build 2>nul
-    if %errorlevel% neq 0 (
-        dotnet run --project MsfsAiAtc.csproj -c Release
-    )
+    exit /b 0
 )
+
+:: Exe not found — setup hasn't been run yet
+echo.
+echo  The app has not been set up yet.
+echo  Please double-click "SETUP (Run This First).bat" first.
+echo.
+pause
+exit /b 1
