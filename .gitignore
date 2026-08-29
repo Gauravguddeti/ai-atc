@@ -5,8 +5,10 @@ obj/
 *.suo
 .vs/
 
-# .env — NEVER commit this
+# Secrets — never commit these
 .env
+dist/.env
+dist/.env.example
 
 # Piper binaries / models (downloaded at install time)
 piper/

@@ -167,7 +167,7 @@ public class MsfsPathFinder
 }
 
 /// <summary>All MSFS filesystem paths resolved from a single UserCfg.opt.</summary>
-public class MsfsInstallPaths
+public record MsfsInstallPaths
 {
     public string Label           { get; init; } = string.Empty;
     public string UserCfgOptPath  { get; init; } = string.Empty;
