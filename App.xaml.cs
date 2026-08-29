@@ -9,6 +9,7 @@ using MsfsAiAtc.SimBridge;
 using MsfsAiAtc.Speech;
 using MsfsAiAtc.Traffic;
 using MsfsAiAtc.Triggers;
+using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Interop;
@@ -47,9 +48,16 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // 1. Logging
+        // Hook unhandled exceptions FIRST so any crash gets logged to disk
+        AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+
+        // 1. Logging — write to both console and a log file in the app root
+        var rootDir = AppRootDir;
+        var logFile = Path.Combine(rootDir, "airatc.log");
         _loggerFactory = LoggerFactory.Create(b => b
             .AddConsole()
+            .AddProvider(new FileLoggerProvider(logFile))
             .SetMinimumLevel(LogLevel.Debug));
 
         var logger = _loggerFactory.CreateLogger<App>();
@@ -122,6 +130,55 @@ public partial class App : Application
 
         // Set main window
         MainWindow = _overlay;
+    }
+
+    // ─── App root directory (one level above dist/ when running from dist) ─────
+
+    /// <summary>
+    /// Resolves the "app root" — the folder containing .env, piper/, etc.
+    /// When running from dist\MsfsAiAtc.exe the root is one level up.
+    /// When running in-place (dev) the root IS the base directory.
+    /// </summary>
+    public static string AppRootDir
+    {
+        get
+        {
+            var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            // If exe is inside a folder called "dist", root is the parent
+            if (Path.GetFileName(exeDir).Equals("dist", StringComparison.OrdinalIgnoreCase))
+                return Path.GetDirectoryName(exeDir) ?? exeDir;
+            return exeDir;
+        }
+    }
+
+    // ─── Crash handlers ───────────────────────────────────────────────────────
+
+    private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        WriteCrashLog(e.ExceptionObject?.ToString() ?? "Unknown error");
+    }
+
+    private void OnDispatcherUnhandledException(object sender,
+        System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        WriteCrashLog(e.Exception.ToString());
+        e.Handled = true; // prevent instant crash so the log is visible
+        MessageBox.Show(
+            $"MSFS AI ATC crashed.\n\nError: {e.Exception.Message}\n\nFull details saved to:\nairatc.log\n\nSend that file to Gaurav.",
+            "MSFS AI ATC — Crash",
+            MessageBoxButton.OK, MessageBoxImage.Error);
+        Shutdown(1);
+    }
+
+    private static void WriteCrashLog(string content)
+    {
+        try
+        {
+            var logPath = Path.Combine(AppRootDir, "airatc.log");
+            var entry = $"[CRASH {DateTime.Now:yyyy-MM-dd HH:mm:ss}]\n{content}\n\n";
+            File.AppendAllText(logPath, entry);
+        }
+        catch { /* can't log the logger failing */ }
     }
 
     // ─── Phase 3 & 4 initialisation ───────────────────────────────────────────
