@@ -25,8 +25,31 @@ public static class ConfigLoader
 
         if (File.Exists(envPath))
         {
-            Env.Load(envPath);
-            logger?.LogInformation("Loaded .env from {Path}", envPath);
+            try
+            {
+                Env.Load(envPath);
+                logger?.LogInformation("Loaded .env from {Path}", envPath);
+            }
+            catch (Exception ex)
+            {
+                // Bad .env syntax (e.g. starts with '-' or has invalid characters)
+                // Show a helpful message instead of crashing
+                var msg =
+                    $"Your .env file has a formatting error and could not be read.\n\n" +
+                    $"Error: {ex.Message}\n\n" +
+                    $"Open the .env file in Notepad and make sure:\n" +
+                    $"  - Line 1 starts with exactly:  GROQ_API_KEY=\n" +
+                    $"  - There are no dashes, spaces, or symbols before any key name\n" +
+                    $"  - The file was NOT opened from inside a ZIP (extract first!)\n\n" +
+                    $"File: {envPath}";
+
+                logger?.LogError("Failed to parse .env: {Err}", ex.Message);
+
+                System.Windows.MessageBox.Show(msg,
+                    "MSFS AI ATC — .env File Error",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
         }
         else
         {
