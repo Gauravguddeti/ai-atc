@@ -59,16 +59,44 @@ public class BglAirportParser
         var results = new Dictionary<string, BglAirportData>(StringComparer.OrdinalIgnoreCase);
         int parsed = 0, skipped = 0;
 
-        // Official first — Community overrides
-        foreach (var folder in new[] { officialFolder, communityFolder })
-        {
-            if (!Directory.Exists(folder)) continue;
+        // Build list of folders to scan: Official first (base airports), then Community (overrides)
+        // Also try the community folder's parent in case MSFS_PACKAGES_PATH was set to Community directly
+        var foldersToScan = new List<(string folder, string label)>();
 
+        if (Directory.Exists(officialFolder))
+            foldersToScan.Add((officialFolder, "Official"));
+
+        if (Directory.Exists(communityFolder))
+            foldersToScan.Add((communityFolder, "Community"));
+
+        // If the communityFolder itself doesn't contain a "Community" or "Official" subfolder,
+        // the user may have pasted the Community path directly — also scan its parent
+        var communityParent = Path.GetDirectoryName(communityFolder.TrimEnd('\\', '/'));
+        if (!string.IsNullOrEmpty(communityParent) &&
+            !string.Equals(communityParent, officialFolder, StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(communityParent))
+        {
+            // Only add parent if it's different and has BGL files
+            var parentBgls = Directory.GetFiles(communityParent, "*.bgl", SearchOption.TopDirectoryOnly);
+            if (parentBgls.Length > 0)
+                foldersToScan.Insert(0, (communityParent, "PackagesRoot"));
+        }
+
+        if (foldersToScan.Count == 0)
+        {
+            _logger.LogWarning("No valid scan folders found. Official={Off} Community={Com}",
+                officialFolder, communityFolder);
+            return results;
+        }
+
+        foreach (var (folder, label) in foldersToScan)
+        {
             var bglFiles = Directory
                 .EnumerateFiles(folder, "*.bgl", SearchOption.AllDirectories)
                 .ToList();
 
-            _logger.LogInformation("Scanning {Count} BGL files in {Folder}", bglFiles.Count, folder);
+            _logger.LogInformation("[{Label}] Scanning {Count} BGL files in: {Folder}",
+                label, bglFiles.Count, folder);
 
             foreach (var bglFile in bglFiles)
             {
@@ -79,12 +107,16 @@ public class BglAirportParser
 
                 parsed++;
                 foreach (var ap in airports)
-                    results[ap.IcaoIdent] = ap; // Community overwrites Official
+                {
+                    results[ap.IcaoIdent] = ap; // later folder wins (Community overrides Official)
+                    _logger.LogDebug("  [{Label}] Airport {Icao} — {Rwys} runways, {Twy} taxiways",
+                        label, ap.IcaoIdent, ap.Runways.Count, ap.TaxiwayNames.Count);
+                }
             }
         }
 
         _logger.LogInformation(
-            "BGL scan complete — {Airports} airports from {Files} files ({Skip} skipped/no airports)",
+            "BGL scan complete — {Airports} airports from {Files} files ({Skip} no-airport files)",
             results.Count, parsed, skipped);
 
         return results;

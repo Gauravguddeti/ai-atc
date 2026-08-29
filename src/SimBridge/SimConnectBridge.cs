@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using MsfsAiAtc.Traffic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -93,15 +94,24 @@ public class SimConnectBridge : IDisposable
         if (_connected || _disposed) return;
         try
         {
-            // Load SimConnect via reflection so the project compiles without the DLL
+            // Step 1: Try to explicitly load SimConnect.dll from disk
+            // (required for FitGirl / non-standard installs where DLL is not in PATH or GAC)
+            TryLoadSimConnectDll();
+
+            // Step 2: Get the type (works if DLL is now loaded, or was already in the AppDomain)
             var simConnectType = Type.GetType(
                 "Microsoft.FlightSimulator.SimConnect.SimConnect, Microsoft.FlightSimulator.SimConnect")
                 ?? FindSimConnectType();
 
             if (simConnectType == null)
             {
-                _logger.LogWarning("SimConnect DLL not found — running in simulation-less mode");
-                SetSimulatedState();
+                _logger.LogWarning("SimConnect DLL not found after searching all known paths. " +
+                    "Check airatc.log for the full list of paths tried.");
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    // Fire the state update so the overlay knows we tried and failed
+                    SetSimulatedState();
+                });
                 return;
             }
 
@@ -112,13 +122,81 @@ public class SimConnectBridge : IDisposable
             SubscribeToEvents();
             _connected = true;
             _state.IsConnected = true;
-            _logger.LogInformation("SimConnect connected");
+            _logger.LogInformation("SimConnect connected successfully");
             Connected?.Invoke();
         }
         catch (Exception ex)
         {
             _logger.LogDebug("SimConnect connection attempt failed: {Msg}", ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Tries to find and load Microsoft.FlightSimulator.SimConnect.dll from disk.
+    /// Searches in priority order: app folder → game root (from MSFS_PACKAGES_PATH) → common paths.
+    /// Logs every path tried so the user can share airatc.log for diagnosis.
+    /// </summary>
+    private void TryLoadSimConnectDll()
+    {
+        // Build search list
+        var appRoot = MsfsAiAtc.App.AppRootDir;
+        var candidates = new List<string>();
+
+        // 1. Next to our exe (most reliable if user copies the DLL there)
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "Microsoft.FlightSimulator.SimConnect.dll"));
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "SimConnect.dll"));
+        candidates.Add(Path.Combine(appRoot, "Microsoft.FlightSimulator.SimConnect.dll"));
+        candidates.Add(Path.Combine(appRoot, "SimConnect.dll"));
+
+        // 2. Derive game root from MSFS_PACKAGES_PATH
+        //    If Packages = D:\MSFS\Packages, game root = D:\MSFS\
+        var packagesPath = Environment.GetEnvironmentVariable("MSFS_PACKAGES_PATH");
+        if (!string.IsNullOrWhiteSpace(packagesPath))
+        {
+            var gameRoot = Path.GetDirectoryName(packagesPath.TrimEnd('\\', '/'));
+            if (!string.IsNullOrEmpty(gameRoot))
+            {
+                candidates.Add(Path.Combine(gameRoot, "Microsoft.FlightSimulator.SimConnect.dll"));
+                candidates.Add(Path.Combine(gameRoot, "SimConnect.dll"));
+                // Also try packages parent itself
+                candidates.Add(Path.Combine(packagesPath, "Microsoft.FlightSimulator.SimConnect.dll"));
+            }
+        }
+
+        // 3. Standard MSFS install locations
+        var pf  = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        foreach (var root in new[] { pf, pf86, @"C:", @"D:", @"E:" })
+        {
+            candidates.Add(Path.Combine(root, "Microsoft Games", "Microsoft Flight Simulator", "Microsoft.FlightSimulator.SimConnect.dll"));
+            candidates.Add(Path.Combine(root, "Microsoft Flight Simulator", "Microsoft.FlightSimulator.SimConnect.dll"));
+            candidates.Add(Path.Combine(root, "MSFS", "Microsoft.FlightSimulator.SimConnect.dll"));
+            candidates.Add(Path.Combine(root, "MSFS 2020", "Microsoft.FlightSimulator.SimConnect.dll"));
+        }
+
+        // Try each candidate
+        foreach (var path in candidates.Distinct())
+        {
+            if (!File.Exists(path))
+            {
+                _logger.LogDebug("SimConnect not at: {Path}", path);
+                continue;
+            }
+
+            try
+            {
+                System.Reflection.Assembly.LoadFrom(path);
+                _logger.LogInformation("Loaded SimConnect from: {Path}", path);
+                return; // success
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Found SimConnect at {Path} but could not load: {Err}", path, ex.Message);
+            }
+        }
+
+        _logger.LogWarning("SimConnect DLL not found in any of {Count} search paths. " +
+            "MSFS must be running and SimConnect installed.", candidates.Count);
     }
 
     private static Type? FindSimConnectType()
