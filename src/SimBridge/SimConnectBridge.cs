@@ -132,71 +132,121 @@ public class SimConnectBridge : IDisposable
     }
 
     /// <summary>
-    /// Tries to find and load Microsoft.FlightSimulator.SimConnect.dll from disk.
-    /// Searches in priority order: app folder → game root (from MSFS_PACKAGES_PATH) → common paths.
-    /// Logs every path tried so the user can share airatc.log for diagnosis.
+    /// Tries to find and load Microsoft.FlightSimulator.SimConnect.dll (the .NET managed wrapper).
+    ///
+    /// IMPORTANT: We ONLY look for "Microsoft.FlightSimulator.SimConnect.dll".
+    /// "SimConnect.dll" is the native C++ DLL — trying to load it as a .NET assembly
+    /// always fails with "Bad IL format". FitGirl repacks include SimConnect.dll (native)
+    /// but NOT the managed wrapper. The managed wrapper must be found separately.
+    ///
+    /// Search order:
+    ///   1. dist/ folder (app next to exe) — fastest, works if user copies it there
+    ///   2. App root folder
+    ///   3. Game root derived from MSFS_PACKAGES_PATH
+    ///   4. Common MSFS install paths
+    ///   5. Recursive search inside the MSFS Packages folder (slow but thorough)
+    ///
+    /// If found, copies the DLL to dist/ so future launches skip the search.
     /// </summary>
     private void TryLoadSimConnectDll()
     {
-        // Build search list
+        const string ManagedDllName = "Microsoft.FlightSimulator.SimConnect.dll";
         var appRoot = MsfsAiAtc.App.AppRootDir;
-        var candidates = new List<string>();
+        var distDir = AppContext.BaseDirectory;
 
-        // 1. Next to our exe (most reliable if user copies the DLL there)
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "Microsoft.FlightSimulator.SimConnect.dll"));
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "SimConnect.dll"));
-        candidates.Add(Path.Combine(appRoot, "Microsoft.FlightSimulator.SimConnect.dll"));
-        candidates.Add(Path.Combine(appRoot, "SimConnect.dll"));
+        // ── Priority list (fast, direct path checks) ─────────────────────────
+        var candidates = new List<string>
+        {
+            Path.Combine(distDir, ManagedDllName),          // next to exe
+            Path.Combine(appRoot, ManagedDllName),          // app root
+        };
 
-        // 2. Derive game root from MSFS_PACKAGES_PATH
-        //    If Packages = D:\MSFS\Packages, game root = D:\MSFS\
+        // Derive game root from MSFS_PACKAGES_PATH env var
         var packagesPath = Environment.GetEnvironmentVariable("MSFS_PACKAGES_PATH");
+        string? gameRoot = null;
         if (!string.IsNullOrWhiteSpace(packagesPath))
         {
-            var gameRoot = Path.GetDirectoryName(packagesPath.TrimEnd('\\', '/'));
+            gameRoot = Path.GetDirectoryName(packagesPath.TrimEnd('\\', '/'));
             if (!string.IsNullOrEmpty(gameRoot))
             {
-                candidates.Add(Path.Combine(gameRoot, "Microsoft.FlightSimulator.SimConnect.dll"));
-                candidates.Add(Path.Combine(gameRoot, "SimConnect.dll"));
-                // Also try packages parent itself
-                candidates.Add(Path.Combine(packagesPath, "Microsoft.FlightSimulator.SimConnect.dll"));
+                candidates.Add(Path.Combine(gameRoot, ManagedDllName));
+                candidates.Add(Path.Combine(packagesPath, ManagedDllName));
             }
         }
 
-        // 3. Standard MSFS install locations
-        var pf  = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        // Standard MSFS install locations
+        var pf   = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-        foreach (var root in new[] { pf, pf86, @"C:", @"D:", @"E:" })
+        foreach (var root in new[] { pf, pf86, @"C:\", @"D:\", @"E:\" })
         {
-            candidates.Add(Path.Combine(root, "Microsoft Games", "Microsoft Flight Simulator", "Microsoft.FlightSimulator.SimConnect.dll"));
-            candidates.Add(Path.Combine(root, "Microsoft Flight Simulator", "Microsoft.FlightSimulator.SimConnect.dll"));
-            candidates.Add(Path.Combine(root, "MSFS", "Microsoft.FlightSimulator.SimConnect.dll"));
-            candidates.Add(Path.Combine(root, "MSFS 2020", "Microsoft.FlightSimulator.SimConnect.dll"));
+            candidates.Add(Path.Combine(root, "Microsoft Games", "Microsoft Flight Simulator", ManagedDllName));
+            candidates.Add(Path.Combine(root, "Microsoft Flight Simulator", ManagedDllName));
+            candidates.Add(Path.Combine(root, "MSFS", ManagedDllName));
+            candidates.Add(Path.Combine(root, "MSFS 2020", ManagedDllName));
         }
 
-        // Try each candidate
+        // Try each candidate path first (fast)
         foreach (var path in candidates.Distinct())
         {
-            if (!File.Exists(path))
-            {
-                _logger.LogDebug("SimConnect not at: {Path}", path);
-                continue;
-            }
+            if (TryLoadManagedSimConnect(path, distDir)) return;
+        }
 
+        // ── Slow fallback: recursive search inside MSFS Packages ─────────────
+        // The managed DLL may be bundled deep inside Official\OneStore\fs-base\...
+        if (!string.IsNullOrWhiteSpace(packagesPath) && Directory.Exists(packagesPath))
+        {
+            _logger.LogInformation("Fast search failed — doing recursive search in Packages folder...");
             try
             {
-                System.Reflection.Assembly.LoadFrom(path);
-                _logger.LogInformation("Loaded SimConnect from: {Path}", path);
-                return; // success
+                var found = Directory.EnumerateFiles(packagesPath, ManagedDllName,
+                                SearchOption.AllDirectories)
+                            .FirstOrDefault();
+                if (found != null)
+                {
+                    if (TryLoadManagedSimConnect(found, distDir)) return;
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Found SimConnect at {Path} but could not load: {Err}", path, ex.Message);
+                _logger.LogDebug("Recursive packages search failed: {Err}", ex.Message);
             }
         }
 
-        _logger.LogWarning("SimConnect DLL not found in any of {Count} search paths. " +
-            "MSFS must be running and SimConnect installed.", candidates.Count);
+        _logger.LogWarning(
+            "Microsoft.FlightSimulator.SimConnect.dll not found anywhere. " +
+            "To fix: In MSFS, turn on Developer Mode → Help → SDK Installer → run it. " +
+            "Then restart AI ATC. Alternatively, copy Microsoft.FlightSimulator.SimConnect.dll " +
+            "manually into the ai-atc-main\\dist\\ folder.");
+    }
+
+    private bool TryLoadManagedSimConnect(string path, string distDir)
+    {
+        if (!File.Exists(path))
+        {
+            _logger.LogDebug("SimConnect managed DLL not at: {Path}", path);
+            return false;
+        }
+
+        try
+        {
+            System.Reflection.Assembly.LoadFrom(path);
+            _logger.LogInformation("Loaded managed SimConnect from: {Path}", path);
+
+            // Copy to dist/ so future launches find it instantly without searching
+            var dest = Path.Combine(distDir, "Microsoft.FlightSimulator.SimConnect.dll");
+            if (!string.Equals(path, dest, StringComparison.OrdinalIgnoreCase) && !File.Exists(dest))
+            {
+                try { File.Copy(path, dest); _logger.LogInformation("Copied SimConnect to dist/ for future launches"); }
+                catch { /* non-fatal */ }
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Found {Path} but could not load as .NET assembly: {Err} " +
+                "(This is the native C++ DLL, not the managed wrapper — wrong file)", path, ex.Message);
+            return false;
+        }
     }
 
     private static Type? FindSimConnectType()

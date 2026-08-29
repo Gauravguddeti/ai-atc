@@ -156,27 +156,22 @@ public class BglAirportParser
     {
         var airports = new List<BglAirportData>();
         var stream   = br.BaseStream;
-        long length  = stream.Length;
 
         // Read BGL header to find section table
-        // BGL file header: first 56 bytes contain section count at offset 0x14 (20)
-        // and section table starts at the header size (usually 56)
         stream.Position = 0;
         var header = br.ReadBytes(56);
-
         if (header.Length < 56) return airports;
 
-        // Try to use section table first (more accurate than scanning)
-        var sectionCountOffset = 20; // 0x14
+        // Try section table approach first (faster — jumps straight to airport sections)
+        var sectionCountOffset = 20;
         int sectionCount = BitConverter.ToInt32(header, sectionCountOffset);
-
         if (sectionCount > 0 && sectionCount < 2000)
         {
             airports.AddRange(ParseViaSectionTable(br, header, sectionCount, filePath));
             if (airports.Count > 0) return airports;
         }
 
-        // Fallback: brute-force scan for airport record signature
+        // Fallback: brute-force scan for airport record signature (0x3C byte at offset +4)
         airports.AddRange(BruteForceAirportScan(br, filePath));
         return airports;
     }
@@ -187,8 +182,7 @@ public class BglAirportParser
         var airports = new List<BglAirportData>();
         var stream   = br.BaseStream;
 
-        // Section table starts at header size (usually 56 = 0x38)
-        // Each section entry is 24 bytes
+        // Section table starts at byte 56, each entry is 24 bytes
         const int SectionEntrySize = 24;
         int headerSize = 56;
 
@@ -206,11 +200,10 @@ public class BglAirportParser
                 uint dataOffset      = br.ReadUInt32();
                 uint totalPackedSize = br.ReadUInt32();
 
-                // Airport sections: type 0x0003 or type 0x0013 (MSFS extended)
-                if (sectionType != 0x0003 && sectionType != 0x0013 &&
-                    sectionType != 0x0001 && sectionType != 0x0011)
-                    continue;
-
+                // MSFS 2020 uses various section types for airport data — don't filter by type.
+                // Instead, let the record-type byte (0x3C) do the filtering.
+                // We skip only obviously irrelevant sections (type 0 = empty, or very large type numbers)
+                if (sectionType == 0 || sectionType > 0xFFFF) continue;
                 if (dataOffset == 0 || dataOffset >= stream.Length) continue;
 
                 // Read subsections
@@ -248,36 +241,44 @@ public class BglAirportParser
 
         try
         {
-            // Read entire file into memory for fast scanning (most BGLs are <10 MB)
             stream.Position = 0;
             var data = br.ReadBytes((int)Math.Min(stream.Length, 20 * 1024 * 1024));
 
             for (int i = 0; i < data.Length - 32; i++)
             {
-                // Airport record starts with record-size (4 bytes) then 0x3C (1 byte)
-                // Validate: size must be reasonable, followed by 0x3C, then valid ICAO chars
+                // Airport record layout: [size:4][type:1=0x3C][...]
                 if (data[i + 4] != AirportRecordId) continue;
 
                 uint recSize = BitConverter.ToUInt32(data, i);
                 if (recSize < 60 || recSize > MaxAirportRecordBytes) continue;
                 if (i + recSize > data.Length) continue;
 
-                // Validate ICAO: 4 bytes starting at offset 8 from record start
-                // Must be uppercase ASCII letters/numbers
-                int icaoStart = i + 8;
-                if (icaoStart + 4 > data.Length) continue;
+                // ICAO is at offset +8 from record start.
+                // MSFS 2020 encodes ICAO as packed base-38 integer — NOT raw ASCII.
+                // We accept the record if EITHER ASCII OR packed-integer decoding gives a valid ICAO.
+                int icaoOffset = i + 8;
+                if (icaoOffset + 4 > data.Length) continue;
 
-                if (!IsValidIcao(data, icaoStart)) continue;
+                var icaoBytes = new byte[4];
+                Array.Copy(data, icaoOffset, icaoBytes, 0, 4);
 
-                // Looks like a valid airport record — parse it
-                using var ms = new MemoryStream(data, i, (int)recSize);
+                // Quick pre-filter: all-zero ICAO is invalid
+                if (icaoBytes[0] == 0 && icaoBytes[1] == 0 && icaoBytes[2] == 0 && icaoBytes[3] == 0)
+                    continue;
+
+                // Accept if EITHER encoding yields a plausible ICAO string
+                bool asciiOk   = IsValidIcaoAsciiBytes(icaoBytes);
+                bool packedOk  = IsValidPackedIcaoBytes(icaoBytes);
+                if (!asciiOk && !packedOk) continue;
+
+                // Full parse
+                using var ms  = new MemoryStream(data, i, (int)recSize);
                 using var mbr = new BinaryReader(ms, Encoding.ASCII);
-
                 var ap = TryReadAirportRecord(mbr, i, recSize, filePath);
                 if (ap != null)
                 {
                     airports.Add(ap);
-                    i += (int)recSize - 1; // skip past this record
+                    i += (int)recSize - 1;
                 }
             }
         }
@@ -288,6 +289,46 @@ public class BglAirportParser
         }
 
         return airports;
+    }
+
+    /// <summary>True if 4 bytes look like a plain ASCII ICAO (uppercase letters / digits).</summary>
+    private static bool IsValidIcaoAsciiBytes(byte[] b)
+    {
+        int validCount = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            if (b[i] == 0) return validCount >= 3;
+            if ((b[i] >= 'A' && b[i] <= 'Z') || (b[i] >= '0' && b[i] <= '9')) { validCount++; continue; }
+            return false;
+        }
+        return validCount >= 3;
+    }
+
+    /// <summary>
+    /// True if 4 bytes, decoded as a base-38 packed MSFS ICAO integer, yield a valid airport code.
+    /// MSFS 2020 stores ICAOs as: packed = char0*38^3 + char1*38^2 + char2*38 + char3
+    /// where space=0, A=1..Z=26, 0=27..9=36.
+    /// </summary>
+    private static bool IsValidPackedIcaoBytes(byte[] b)
+    {
+        uint packed = BitConverter.ToUInt32(b, 0);
+        if (packed == 0) return false;
+
+        const string chars = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        char[] decoded = new char[4];
+        uint temp = packed;
+        for (int i = 3; i >= 0; i--)
+        {
+            int idx = (int)(temp % 38);
+            if (idx >= chars.Length) return false;
+            decoded[i] = chars[idx];
+            temp /= 38;
+        }
+
+        // Must have at least 3 alphanumeric characters after trimming
+        var result = new string(decoded).Trim();
+        if (result.Length < 3) return false;
+        return result.All(c => char.IsLetterOrDigit(c));
     }
 
     // ─── Airport record parser ────────────────────────────────────────────────
@@ -570,10 +611,11 @@ public class BglAirportParser
 
     private static bool IsValidIcao(byte[] data, int offset)
     {
+        // Legacy helper — kept for compatibility. New code uses IsValidIcaoAsciiBytes / IsValidPackedIcaoBytes.
         for (int i = 0; i < 4; i++)
         {
             byte b = data[offset + i];
-            if (b == 0) return i >= 3; // null-terminated is OK if at least 3 chars
+            if (b == 0) return i >= 3;
             if (!((b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == ' '))
                 return false;
         }
