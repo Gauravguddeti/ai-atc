@@ -1,5 +1,5 @@
 # MSFS AI ATC — Setup Helper Script
-# Downloads Piper TTS binaries and voice model.
+# Downloads Piper TTS binaries, voice model, and worldwide airport database.
 # Run from the repo root: .\setup-piper.ps1
 
 param(
@@ -11,29 +11,31 @@ $ErrorActionPreference = "Stop"
 $BaseDir = Split-Path -Parent $PSCommandPath
 $PiperDir = Join-Path $BaseDir "piper"
 $ModelsDir = Join-Path $PiperDir "models"
+$DataDir = Join-Path $BaseDir "dist\data"
 
 Write-Host ""
-Write-Host "  MSFS AI ATC - Piper TTS Setup" -ForegroundColor Cyan
-Write-Host "  ================================" -ForegroundColor Cyan
+Write-Host "  MSFS AI ATC - Setup" -ForegroundColor Cyan
+Write-Host "  ====================" -ForegroundColor Cyan
 Write-Host ""
 
 New-Item -ItemType Directory -Force -Path $PiperDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ModelsDir | Out-Null
+New-Item -ItemType Directory -Force -Path $DataDir   | Out-Null
 
 $PiperExe = Join-Path $PiperDir "piper.exe"
 $PiperZipUrl = "https://github.com/rhasspy/piper/releases/download/$PiperVersion/piper_windows_amd64.zip"
 $PiperZipPath = Join-Path $PiperDir "piper_windows.zip"
 
 if (Test-Path $PiperExe) {
-    Write-Host "  [1/3] Piper binary already present" -ForegroundColor Green
+    Write-Host "  [1/4] Piper binary already present" -ForegroundColor Green
 } else {
-    Write-Host "  [1/3] Downloading Piper binary from GitHub..." -ForegroundColor Yellow
+    Write-Host "  [1/4] Downloading Piper binary from GitHub..." -ForegroundColor Yellow
     Write-Host "        $PiperZipUrl"
     Invoke-WebRequest -Uri $PiperZipUrl -OutFile $PiperZipPath -UseBasicParsing
-    Write-Host "  [1/3] Extracting..." -ForegroundColor Yellow
+    Write-Host "  [1/4] Extracting..." -ForegroundColor Yellow
     Expand-Archive -Path $PiperZipPath -DestinationPath $PiperDir -Force
     Remove-Item $PiperZipPath -ErrorAction SilentlyContinue
-    Write-Host "  [1/3] Piper binary installed" -ForegroundColor Green
+    Write-Host "  [1/4] Piper binary installed" -ForegroundColor Green
 }
 
 $VoiceParts = $VoiceName.Split("-")
@@ -50,30 +52,66 @@ $OnnxPath = Join-Path $ModelsDir "$VoiceName.onnx"
 $JsonPath  = Join-Path $ModelsDir "$VoiceName.onnx.json"
 
 if (Test-Path $OnnxPath) {
-    Write-Host "  [2/3] Voice model already present" -ForegroundColor Green
+    Write-Host "  [2/4] Voice model already present" -ForegroundColor Green
 } else {
-    Write-Host "  [2/3] Downloading voice model: $VoiceName..." -ForegroundColor Yellow
+    Write-Host "  [2/4] Downloading voice model: $VoiceName..." -ForegroundColor Yellow
     Write-Host "        $OnnxUrl"
     Invoke-WebRequest -Uri $OnnxUrl -OutFile $OnnxPath -UseBasicParsing
-    Write-Host "  [2/3] Voice model downloaded" -ForegroundColor Green
+    Write-Host "  [2/4] Voice model downloaded" -ForegroundColor Green
 }
 
 if (Test-Path $JsonPath) {
-    Write-Host "  [3/3] Voice config already present" -ForegroundColor Green
+    Write-Host "  [3/4] Voice config already present" -ForegroundColor Green
 } else {
-    Write-Host "  [3/3] Downloading voice config..." -ForegroundColor Yellow
+    Write-Host "  [3/4] Downloading voice config..." -ForegroundColor Yellow
     try {
         Invoke-WebRequest -Uri $JsonUrl -OutFile $JsonPath -UseBasicParsing
-        Write-Host "  [3/3] Voice config downloaded" -ForegroundColor Green
+        Write-Host "  [3/4] Voice config downloaded" -ForegroundColor Green
     } catch {
-        Write-Host "  [3/3] Voice config not required, skipping" -ForegroundColor Gray
+        Write-Host "  [3/4] Voice config not required, skipping" -ForegroundColor Gray
+    }
+}
+
+# ── Step 4: Airport + Runway database (from OurAirports.com) ─────────────────
+# This replaces BGL file parsing. MSFS 2020's Official BGLs use Asobo's
+# proprietary format — our FSX parser gets 0 airports from 6000+ files.
+# OurAirports gives us 80,000+ worldwide airports in a clean CSV format.
+$AirportsCsv = Join-Path $DataDir "airports.csv"
+$RunwaysCsv  = Join-Path $DataDir "runways.csv"
+
+if (Test-Path $AirportsCsv) {
+    Write-Host "  [4/4] Airport database already present" -ForegroundColor Green
+} else {
+    Write-Host "  [4/4] Downloading worldwide airport database (~4 MB)..." -ForegroundColor Yellow
+    Write-Host "        Source: ourairports.com (public domain)"
+    try {
+        Invoke-WebRequest -Uri "https://davidmegginson.github.io/ourairports-data/airports.csv" `
+            -OutFile $AirportsCsv -UseBasicParsing
+        Write-Host "  [4/4] airports.csv downloaded" -ForegroundColor Green
+    } catch {
+        Write-Host "  [4/4] WARNING: Could not download airports.csv — airport detection will be limited" -ForegroundColor Red
+    }
+}
+
+if (Test-Path $RunwaysCsv) {
+    Write-Host "        Runway database already present" -ForegroundColor Green
+} else {
+    Write-Host "        Downloading runway database (~2 MB)..." -ForegroundColor Yellow
+    try {
+        Invoke-WebRequest -Uri "https://davidmegginson.github.io/ourairports-data/runways.csv" `
+            -OutFile $RunwaysCsv -UseBasicParsing
+        Write-Host "        runways.csv downloaded" -ForegroundColor Green
+    } catch {
+        Write-Host "        WARNING: Could not download runways.csv" -ForegroundColor DarkYellow
     }
 }
 
 Write-Host ""
 Write-Host "  Setup complete!" -ForegroundColor Green
-Write-Host "  Piper:  $PiperExe"
-Write-Host "  Model:  $OnnxPath"
+Write-Host "  Piper:    $PiperExe"
+Write-Host "  Model:    $OnnxPath"
+Write-Host "  Airports: $AirportsCsv"
 Write-Host ""
-Write-Host "  Now run: dotnet run" -ForegroundColor Cyan
+Write-Host "  Now start MSFS, load into a flight, then run:" -ForegroundColor Cyan
+Write-Host "  Start AI ATC.bat" -ForegroundColor Cyan
 Write-Host ""

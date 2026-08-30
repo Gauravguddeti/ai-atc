@@ -133,7 +133,9 @@ public class SimConnectBridge : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug("SimConnect connection attempt failed: {Msg}", ex.Message);
+            // Log at Warning (not Debug) so the error appears in airatc.log
+            // This tells us exactly WHY SimConnect isn't connecting
+            _logger.LogWarning("SimConnect connection attempt failed: {Msg}", ex.Message);
         }
     }
 

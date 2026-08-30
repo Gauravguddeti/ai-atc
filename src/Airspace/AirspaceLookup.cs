@@ -6,18 +6,18 @@ namespace MsfsAiAtc.Airspace;
 /// <summary>
 /// Phase 3: Airspace context service.
 ///
-/// Combines three data sources to produce a rich context string for the LLM:
-///   1. BGL Airport Database (taxiways, runways, parking) — from parsed MSFS game files
-///   2. Active Flight Plan (.pln XML) — from MSFS LocalState folder
+/// Combines data sources to produce a rich context string for the LLM:
+///   1. OurAirports DB  — worldwide airport/runway data (replaces BGL parsing)
+///   2. Flight Plan (.pln XML) — from MSFS LocalState folder
 ///   3. SimState (position, frequencies, wind) — live from SimConnect
-///
-/// This class is the single integration point wired into AtcBrainService.
+///   4. BGL Airport Cache (optional legacy fallback, always empty for MSFS 2020)
 /// </summary>
 public class AirspaceLookup
 {
     private readonly ILogger<AirspaceLookup> _logger;
-    private readonly AirportCache? _airportCache;
+    private readonly AirportCache? _airportCache;       // BGL-based (empty for MSFS 2020)
     private readonly FlightPlanReader? _flightPlanReader;
+    private readonly OurAirportsDb? _ourAirports;       // PRIMARY airport data source
 
     // Flight plan is cached and refreshed every 60 s in case the user loads a new plan
     private ActiveFlightPlan? _cachedPlan;
@@ -27,49 +27,68 @@ public class AirspaceLookup
     public AirspaceLookup(
         ILogger<AirspaceLookup> logger,
         AirportCache? airportCache = null,
-        FlightPlanReader? flightPlanReader = null)
+        FlightPlanReader? flightPlanReader = null,
+        OurAirportsDb? ourAirports = null)
     {
-        _logger = logger;
-        _airportCache = airportCache;
+        _logger          = logger;
+        _airportCache    = airportCache;
         _flightPlanReader = flightPlanReader;
-
-        if (airportCache == null)
-            _logger.LogInformation("AirspaceLookup: no airport cache (MSFS not found) — taxiway data unavailable");
-        if (flightPlanReader == null)
-            _logger.LogInformation("AirspaceLookup: no flight plan reader — IFR routing unavailable");
+        _ourAirports     = ourAirports;
     }
 
     /// <summary>
     /// Builds the airspace context string to inject into the LLM system prompt.
-    /// Call once per LLM request. Lightweight — data is already cached in memory.
+    /// Called once per PTT press. Lightweight — all data is already in memory.
     /// </summary>
     public string BuildContextString(SimState state)
     {
         var sb = new System.Text.StringBuilder();
 
-        // ── Flight plan ────────────────────────────────────────────────────────
+        // ── Flight plan ────────────────────────────────────────────────────────────────────
         var plan = GetCachedFlightPlan();
         if (plan != null && !string.IsNullOrWhiteSpace(plan.DepartureIcao))
-        {
             sb.AppendLine($"[FLIGHT PLAN] {plan.ToContextString()}");
-        }
 
-        // ── Airport layout from BGL ────────────────────────────────────────────
-        if (_airportCache?.IsLoaded == true && state.NearestAirportIcao != null)
+        // ── Airport layout ──────────────────────────────────────────────────────────────────
+        // Step 1: Try to get airport from OurAirports DB (primary source)
+        OurAirport? ourAirport = null;
+
+        // Try by ICAO code first (from SimConnect sim vars)
+        if (!string.IsNullOrWhiteSpace(state.NearestAirportIcao))
+            ourAirport = _ourAirports?.Lookup(state.NearestAirportIcao);
+
+        // Fallback: find by position if we have a valid lat/lon (SimConnect connected)
+        if (ourAirport == null && state.IsConnected && state.LatitudeDeg != 0)
+            ourAirport = _ourAirports?.NearestTo(state.LatitudeDeg, state.LongitudeDeg, 25);
+
+        if (ourAirport != null)
         {
-            var airport = _airportCache.Lookup(state.NearestAirportIcao);
+            // Update SimState airport ICAO if we found it by position
+            if (string.IsNullOrWhiteSpace(state.NearestAirportIcao))
+                state.NearestAirportIcao = ourAirport.Icao;
 
-            // If SimConnect's ICAO didn't match, try by position
-            airport ??= _airportCache.NearestAirport(state.LatitudeDeg, state.LongitudeDeg, 5);
+            sb.AppendLine($"[AIRPORT LAYOUT] {ourAirport.ToLayoutString()}");
 
-            if (airport != null)
+            // Populate SimState runways from OurAirports if not already set
+            if (ourAirport.Runways.Count > 0 && state.Runways.Count == 0)
             {
-                sb.AppendLine($"[AIRPORT LAYOUT] {airport.ToLayoutString()}");
+                state.Runways = ourAirport.Runways
+                    .Select(r => new RunwayInfo { Designation = r.Designation, LengthFt = r.LengthFt, HeadingDeg = r.HeadingDeg })
+                    .ToList();
+            }
+        }
+        else if (_airportCache?.IsLoaded == true && state.NearestAirportIcao != null)
+        {
+            // Legacy fallback: BGL cache (empty for MSFS 2020, but kept for FSX/P3D users)
+            var bglAirport = _airportCache.Lookup(state.NearestAirportIcao)
+                          ?? _airportCache.NearestAirport(state.LatitudeDeg, state.LongitudeDeg, 5);
 
-                // Override SimState runway list with BGL data (more accurate)
-                if (airport.Runways.Count > 0 && state.Runways.Count == 0)
+            if (bglAirport != null)
+            {
+                sb.AppendLine($"[AIRPORT LAYOUT] {bglAirport.ToLayoutString()}");
+                if (bglAirport.Runways.Count > 0 && state.Runways.Count == 0)
                 {
-                    state.Runways = airport.Runways.Select(r => new RunwayInfo
+                    state.Runways = bglAirport.Runways.Select(r => new RunwayInfo
                     {
                         Designation = r.Designation,
                         HeadingDeg  = r.HeadingDeg,

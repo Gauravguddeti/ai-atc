@@ -40,6 +40,7 @@ public partial class App : Application
     // Phase 3 & 4
     private AirspaceLookup _airspaceLookup = null!;
     private TrafficTracker _trafficTracker = null!;
+    private OurAirportsDb _ourAirportsDb = null!;
 
     private HttpClient _httpClient = null!;
     private CancellationTokenSource _appCts = new();
@@ -191,14 +192,44 @@ public partial class App : Application
         _trafficTracker = new TrafficTracker(_loggerFactory.CreateLogger<TrafficTracker>());
         _simBridge.SetTrafficTracker(_trafficTracker);
 
-        // Discover MSFS installation (runs fast — just reads one text file)
+        // ── OurAirports database (replaces BGL parser for MSFS 2020) ──────────
+        // MSFS 2020 Official BGLs are in Asobo's proprietary format — our FSX
+        // parser gets 0 airports from 6000+ files every time. OurAirports gives
+        // us 80k+ worldwide airports loaded in <2 seconds.
+        var appDataDir = Path.Combine(AppContext.BaseDirectory, "data");
+        var airportsCsv = Path.Combine(appDataDir, "airports.csv");
+        var runwaysCsv  = Path.Combine(appDataDir, "runways.csv");
+
+        _ourAirportsDb = new OurAirportsDb(_loggerFactory.CreateLogger<OurAirportsDb>());
+
+        if (File.Exists(airportsCsv))
+        {
+            _overlay.AddSystemMessage("Loading airport database...");
+            Task.Run(() =>
+            {
+                _ourAirportsDb.Load(airportsCsv, runwaysCsv);
+                Application.Current?.Dispatcher.Invoke(() =>
+                    _overlay.AddSystemMessage(
+                        $"✓ Airport DB ready — {_ourAirportsDb.AirportCount:N0} airports"));
+            });
+        }
+        else
+        {
+            _overlay.AddSystemMessage(
+                "⚠ Airport database not found. " +
+                "Run 'SETUP (Run This First).bat' to download it.");
+        }
+
+        // Discover MSFS installation
         var pathFinder = new MsfsPathFinder(_loggerFactory.CreateLogger<MsfsPathFinder>());
         var paths = pathFinder.Discover();
 
         if (paths == null)
         {
-            _overlay.AddSystemMessage("⚠ MSFS install not found — taxiway data unavailable");
-            _airspaceLookup = new AirspaceLookup(_loggerFactory.CreateLogger<AirspaceLookup>());
+            _overlay.AddSystemMessage("⚠ MSFS install not found — flight plan unavailable");
+            _airspaceLookup = new AirspaceLookup(
+                _loggerFactory.CreateLogger<AirspaceLookup>(), null, null, _ourAirportsDb);
+            logger.LogInformation("Phase 3 & 4 services initialised");
             return;
         }
 
@@ -206,26 +237,11 @@ public partial class App : Application
         var flightPlanReader = new FlightPlanReader(
             _loggerFactory.CreateLogger<FlightPlanReader>(), paths.LocalStateFolder);
 
-        // Airport cache — BGL scan runs in the background; overlay shows progress
-        var appDataDir = System.IO.Path.Combine(
-            AppContext.BaseDirectory, "data");
-        var airportCache = new AirportCache(
-            _loggerFactory.CreateLogger<AirportCache>(), _loggerFactory, paths, appDataDir);
-
-        airportCache.ScanProgressUpdate += msg =>
-            Application.Current?.Dispatcher.Invoke(() => _overlay.AddSystemMessage($"🗺 {msg}"));
-
-        airportCache.ScanComplete += count =>
-            Application.Current?.Dispatcher.Invoke(() =>
-                _overlay.AddSystemMessage($"✓ Airport DB ready — {count} airports loaded"));
-
-        // Start BGL scan on background thread (doesn't block UI or PTT)
-        _ = airportCache.InitialiseAsync(_appCts.Token);
-
         _airspaceLookup = new AirspaceLookup(
             _loggerFactory.CreateLogger<AirspaceLookup>(),
-            airportCache,
-            flightPlanReader);
+            null,            // BGL cache not used (MSFS 2020 format not parseable)
+            flightPlanReader,
+            _ourAirportsDb);
 
         logger.LogInformation("Phase 3 & 4 services initialised");
     }
