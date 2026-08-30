@@ -21,6 +21,11 @@ public struct AircraftData
     public double Com1Freq;
     public double WindSpeed;
     public double WindDirection;
+    // Airport ICAO from SimConnect — replaces BGL parsing for airport identification
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]
+    public string DepartureAirportIcao;   // GPS FLIGHT PLAN DEPARTURE AIRPORT
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]
+    public string CurrentAirportIcao;     // ATC RUNWAY AIRPORT NAME
 }
 
 /// <summary>
@@ -39,6 +44,10 @@ public class SimConnectBridge : IDisposable
     private System.Threading.Timer? _retryTimer;
     private bool _connected;
     private bool _disposed;
+
+    // Set to true once the managed SimConnect DLL has been successfully loaded into the AppDomain.
+    // Prevents re-running the expensive file search on every 10-second retry.
+    private static bool _dllLoaded = false;
 
     // Events
     public event Action<SimState>? StateUpdated;
@@ -94,24 +103,21 @@ public class SimConnectBridge : IDisposable
         if (_connected || _disposed) return;
         try
         {
-            // Step 1: Try to explicitly load SimConnect.dll from disk
-            // (required for FitGirl / non-standard installs where DLL is not in PATH or GAC)
-            TryLoadSimConnectDll();
+            // Step 1: Load the managed SimConnect DLL (only searches disk once)
+            if (!_dllLoaded)
+                TryLoadSimConnectDll();
 
-            // Step 2: Get the type (works if DLL is now loaded, or was already in the AppDomain)
+            // Step 2: Get the SimConnect type from the loaded assembly
             var simConnectType = Type.GetType(
                 "Microsoft.FlightSimulator.SimConnect.SimConnect, Microsoft.FlightSimulator.SimConnect")
                 ?? FindSimConnectType();
 
             if (simConnectType == null)
             {
-                _logger.LogWarning("SimConnect DLL not found after searching all known paths. " +
-                    "Check airatc.log for the full list of paths tried.");
-                Application.Current?.Dispatcher.Invoke(() =>
-                {
-                    // Fire the state update so the overlay knows we tried and failed
-                    SetSimulatedState();
-                });
+                _logger.LogWarning("SimConnect DLL not found. " +
+                    "Copy Microsoft.FlightSimulator.SimConnect.dll into the dist\\ folder, " +
+                    "or install the MSFS SDK from Developer Mode → Help → SDK Installer.");
+                SetSimulatedState();
                 return;
             }
 
@@ -227,24 +233,45 @@ public class SimConnectBridge : IDisposable
             return false;
         }
 
+        // Before trying to load the managed DLL, copy the NATIVE SimConnect.dll from the
+        // same source folder into distDir. The managed DLL P/Invokes into the native one —
+        // without the native DLL in the same folder as our exe, the managed load will fail
+        // with "The specified module could not be found" (missing dependency).
+        var sourceDir  = Path.GetDirectoryName(path)!;
+        var nativeSrc  = Path.Combine(sourceDir, "SimConnect.dll");
+        var nativeDest = Path.Combine(distDir, "SimConnect.dll");
+        if (File.Exists(nativeSrc) && !File.Exists(nativeDest))
+        {
+            try
+            {
+                File.Copy(nativeSrc, nativeDest);
+                _logger.LogInformation("Copied native SimConnect.dll to dist/ (required dependency)");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Could not copy native SimConnect.dll: {Err}", ex.Message);
+            }
+        }
+
         try
         {
             System.Reflection.Assembly.LoadFrom(path);
             _logger.LogInformation("Loaded managed SimConnect from: {Path}", path);
 
-            // Copy to dist/ so future launches find it instantly without searching
+            // Copy managed DLL to dist/ so future launches find it instantly without searching
             var dest = Path.Combine(distDir, "Microsoft.FlightSimulator.SimConnect.dll");
             if (!string.Equals(path, dest, StringComparison.OrdinalIgnoreCase) && !File.Exists(dest))
             {
-                try { File.Copy(path, dest); _logger.LogInformation("Copied SimConnect to dist/ for future launches"); }
+                try { File.Copy(path, dest); _logger.LogInformation("Copied managed SimConnect to dist/"); }
                 catch { /* non-fatal */ }
             }
+
+            _dllLoaded = true; // Don't search again this session
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Found {Path} but could not load as .NET assembly: {Err} " +
-                "(This is the native C++ DLL, not the managed wrapper — wrong file)", path, ex.Message);
+            _logger.LogWarning("Found {Path} but failed to load: {Err}", path, ex.Message);
             return false;
         }
     }
@@ -264,24 +291,25 @@ public class SimConnectBridge : IDisposable
         if (_simConnect == null) return;
         try
         {
-            // Use reflection to call AddToDataDefinition for each field
             var sc = _simConnect;
-            void AddDef(string name, string units, int type)
-            {
-                // SIMCONNECT_DATATYPE.FLOAT64 = 8
+            // SIMCONNECT_DATATYPE: FLOAT64=8, STRING8=4, STRING32=5, STRING64=6
+            void AddDef(string name, string units, int type) =>
                 sc.AddToDataDefinition(DefId.AircraftData, name, units, type, 0.0f, -1);
-            }
 
-            AddDef("PLANE LATITUDE", "degrees", 8);
-            AddDef("PLANE LONGITUDE", "degrees", 8);
-            AddDef("PLANE ALTITUDE", "feet", 8);
-            AddDef("PLANE ALT ABOVE GROUND", "feet", 8);
-            AddDef("PLANE HEADING DEGREES TRUE", "degrees", 8);
-            AddDef("GROUND VELOCITY", "knots", 8);
-            AddDef("SIM ON GROUND", "bool", 8);
-            AddDef("COM ACTIVE FREQUENCY:1", "MHz", 8);
-            AddDef("AMBIENT WIND VELOCITY", "knots", 8);
-            AddDef("AMBIENT WIND DIRECTION", "degrees", 8);
+            AddDef("PLANE LATITUDE",                   "degrees", 8);
+            AddDef("PLANE LONGITUDE",                  "degrees", 8);
+            AddDef("PLANE ALTITUDE",                   "feet",    8);
+            AddDef("PLANE ALT ABOVE GROUND",           "feet",    8);
+            AddDef("PLANE HEADING DEGREES TRUE",       "degrees", 8);
+            AddDef("GROUND VELOCITY",                  "knots",   8);
+            AddDef("SIM ON GROUND",                    "bool",    8);
+            AddDef("COM ACTIVE FREQUENCY:1",           "MHz",     8);
+            AddDef("AMBIENT WIND VELOCITY",            "knots",   8);
+            AddDef("AMBIENT WIND DIRECTION",           "degrees", 8);
+            // Airport ICAO — this is the key field that replaces BGL parsing!
+            // "GPS FLIGHT PLAN DEPARTURE AIRPORT" gives the departure airport ICAO as a string.
+            AddDef("GPS FLIGHT PLAN DEPARTURE AIRPORT", string.Empty, 4); // STRING8
+            AddDef("ATC RUNWAY AIRPORT NAME",           string.Empty, 4); // STRING8 — current airport
 
             sc.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
 
@@ -376,9 +404,23 @@ public class SimConnectBridge : IDisposable
                 _state.WindDirectionDeg = d.WindDirection;
                 _state.SimTime        = DateTime.UtcNow;
                 _state.LastUpdated    = DateTime.UtcNow;
+
+                // Use SimConnect's own airport ICAO — works without BGL parsing.
+                // CurrentAirportIcao (ATC RUNWAY AIRPORT NAME) is non-empty when on the ground at an airport.
+                // DepartureAirportIcao (GPS FLIGHT PLAN DEPARTURE AIRPORT) is set once a flight plan is loaded.
+                var currentIcao = d.CurrentAirportIcao?.Trim();
+                var departIcao  = d.DepartureAirportIcao?.Trim();
+                var bestIcao    = (!string.IsNullOrWhiteSpace(currentIcao)) ? currentIcao : departIcao;
+
+                if (!string.IsNullOrWhiteSpace(bestIcao) && bestIcao != _state.NearestAirportIcao)
+                {
+                    _state.NearestAirportIcao = bestIcao;
+                    _logger.LogInformation("Airport from SimConnect: {Icao} (current={C} depart={D})",
+                        bestIcao, currentIcao, departIcao);
+                }
+
                 StateUpdated?.Invoke(_state);
             }
-            // Traffic responses come one aircraft at a time via OnRecvSimobjectDataBytype
         }
         catch (Exception ex)
         {
