@@ -113,7 +113,12 @@ public partial class App : Application
         // 6. SimConnect — needs HWND, wait for overlay window to initialize
         _simBridge = new SimConnectBridge(_loggerFactory.CreateLogger<SimConnectBridge>());
         _simBridge.StateUpdated += OnSimStateUpdated;
-        _simBridge.Connected += () => _overlay.AddSystemMessage("SimConnect: Connected to MSFS ✓");
+        _simBridge.Connected += () =>
+        {
+            _overlay.AddSystemMessage("SimConnect: Connected to MSFS ✓");
+            // Immediately update the overlay header (don't wait for first data packet)
+            _overlay.UpdateSimState(_simBridge.CurrentState);
+        };
         _simBridge.Disconnected += () => _overlay.AddSystemMessage("SimConnect: Disconnected — retrying...");
 
         // Initialize after overlay is rendered (to get HWND)

@@ -358,9 +358,45 @@ public class SimConnectBridge : IDisposable
 
             _simConnect.RegisterDataDefineStruct<TrafficObjectData>(DefId.TrafficData);
 
-            // System event subscriptions (no boxed-object issue here)
-            _simConnect.SubscribeToSystemEvent(EventId.OneSecond,  "1sec");
-            _simConnect.SubscribeToSystemEvent(EventId.FiveSecond, "5sec");
+            // ── Start continuous data streaming ────────────────────────────────
+            // Use SIMCONNECT_PERIOD.SECOND instead of SubscribeToSystemEvent("1sec").
+            // WHY: SubscribeToSystemEvent fires only when the SIMULATION is running
+            // (i.e. player is in a flight, not in menus/world map). If AI ATC starts
+            // before or during loading, no data ever arrives. SIMCONNECT_PERIOD.SECOND
+            // tells SimConnect to push data to us every sim-second automatically,
+            // regardless of whether the sim-event system is active.
+            var periodEnum = asm.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_PERIOD");
+            var flagEnum   = asm.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_DATA_REQUEST_FLAG");
+
+            if (periodEnum != null && flagEnum != null)
+            {
+                object periodSec = Enum.Parse(periodEnum, "SECOND");
+                object flagDef   = Enum.Parse(flagEnum,   "DEFAULT");
+
+                // Must use Invoke (same reason as AddToDataDefinition — boxed object type)
+                var reqMethod = scType.GetMethods()
+                    .First(m => m.Name == "RequestDataOnSimObject" && m.GetParameters().Length == 8);
+
+                // Aircraft data: push every sim-second, no limit
+                reqMethod.Invoke(scObj, new object[] {
+                    RequestId.Aircraft, DefId.AircraftData,
+                    (uint)0,   // SIMCONNECT_OBJECT_ID_USER
+                    periodSec, // SIMCONNECT_PERIOD.SECOND
+                    flagDef,   // SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT
+                    (uint)0,   // origin
+                    (uint)0,   // interval
+                    (uint)0    // limit (0 = forever)
+                });
+
+                _logger.LogInformation("SimConnect: continuous SECOND-period data streaming started");
+            }
+            else
+            {
+                // Fallback if enum names differ in this SDK version
+                _logger.LogWarning("SIMCONNECT_PERIOD not found in assembly — falling back to system events");
+                _simConnect.SubscribeToSystemEvent(EventId.OneSecond,  "1sec");
+                _simConnect.SubscribeToSystemEvent(EventId.FiveSecond, "5sec");
+            }
 
             _logger.LogInformation("SimConnect data definitions registered successfully");
         }
@@ -442,6 +478,8 @@ public class SimConnectBridge : IDisposable
         catch { }
     }
 
+    private bool _firstDataReceived = false;
+
     private void OnReceiveSimObjectData(object sender, object dataObj)
     {
         dynamic data = dataObj;
@@ -451,26 +489,29 @@ public class SimConnectBridge : IDisposable
 
             if (reqId == (uint)RequestId.Aircraft)
             {
-                var d = (AircraftData)data.dwData[0];
-                _state.LatitudeDeg    = d.Latitude;
-                _state.LongitudeDeg   = d.Longitude;
-                _state.AltitudeMslFt  = d.AltitudeMsl;
-                _state.AltitudeAglFt  = d.AltitudeAgl;
-                _state.HeadingDegTrue = d.HeadingTrue;
-                _state.GroundSpeedKts = d.GroundSpeed;
-                _state.OnGround       = d.SimOnGround > 0.5;
-                _state.Com1FreqMhz    = d.Com1Freq;
-                _state.WindSpeedKts   = d.WindSpeed;
-                _state.WindDirectionDeg = d.WindDirection;
-                _state.SimTime        = DateTime.UtcNow;
-                _state.LastUpdated    = DateTime.UtcNow;
+                if (!_firstDataReceived)
+                {
+                    _firstDataReceived = true;
+                    _logger.LogInformation("SimConnect: first aircraft data packet received — data is flowing!");
+                }
 
-                // Use SimConnect's own airport ICAO — works without BGL parsing.
-                // CurrentAirportIcao (ATC RUNWAY AIRPORT NAME) is non-empty when on the ground at an airport.
-                // DepartureAirportIcao (GPS FLIGHT PLAN DEPARTURE AIRPORT) is set once a flight plan is loaded.
+                var d = (AircraftData)data.dwData[0];
+                _state.LatitudeDeg      = d.Latitude;
+                _state.LongitudeDeg     = d.Longitude;
+                _state.AltitudeMslFt    = d.AltitudeMsl;
+                _state.AltitudeAglFt    = d.AltitudeAgl;
+                _state.HeadingDegTrue   = d.HeadingTrue;
+                _state.GroundSpeedKts   = d.GroundSpeed;
+                _state.OnGround         = d.SimOnGround > 0.5;
+                _state.Com1FreqMhz      = d.Com1Freq;
+                _state.WindSpeedKts     = d.WindSpeed;
+                _state.WindDirectionDeg = d.WindDirection;
+                _state.SimTime          = DateTime.UtcNow;
+                _state.LastUpdated      = DateTime.UtcNow;
+
                 var currentIcao = d.CurrentAirportIcao?.Trim();
                 var departIcao  = d.DepartureAirportIcao?.Trim();
-                var bestIcao    = (!string.IsNullOrWhiteSpace(currentIcao)) ? currentIcao : departIcao;
+                var bestIcao    = !string.IsNullOrWhiteSpace(currentIcao) ? currentIcao : departIcao;
 
                 if (!string.IsNullOrWhiteSpace(bestIcao) && bestIcao != _state.NearestAirportIcao)
                 {
@@ -484,7 +525,8 @@ public class SimConnectBridge : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug("Error processing SimConnect data: {Msg}", ex.Message);
+            // Raised to Warning so struct parse failures appear in the log
+            _logger.LogWarning("Error processing SimConnect aircraft data: {Msg}", ex.Message);
         }
     }
 
