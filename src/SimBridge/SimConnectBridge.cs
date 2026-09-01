@@ -34,7 +34,7 @@ public struct AircraftData
 /// </summary>
 public class SimConnectBridge : IDisposable
 {
-    private const int WM_USER_SIMCONNECT = 0x0402;
+    private const uint WM_USER_SIMCONNECT = 0x0402;
     private const string APP_NAME = "MSFS_AI_ATC";
 
     private readonly ILogger<SimConnectBridge> _logger;
@@ -121,8 +121,11 @@ public class SimConnectBridge : IDisposable
                 return;
             }
 
+            // Activator.CreateInstance is STRICT about types. The SimConnect constructor expects:
+            // (string szName, IntPtr hWnd, uint UserEventWin32, EventHandle hEventHandle, uint ConfigIndex)
+            // Passing 'int' where 'uint' is expected causes "Constructor not found" exception.
             _simConnect = Activator.CreateInstance(simConnectType,
-                APP_NAME, hwnd, WM_USER_SIMCONNECT, null, 0);
+                APP_NAME, hwnd, WM_USER_SIMCONNECT, null, 0u);
 
             RegisterDataDefinitions();
             SubscribeToEvents();
