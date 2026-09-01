@@ -298,57 +298,71 @@ public class SimConnectBridge : IDisposable
         if (_simConnect == null) return;
         try
         {
-            var sc = _simConnect;
-            var asm = ((object)sc).GetType().Assembly;
+            var scObj  = (object)_simConnect;
+            var scType = scObj.GetType();
+            var asm    = scType.Assembly;
+
+            // Resolve SIMCONNECT_DATATYPE enum values from the loaded assembly.
             var dataTypeEnum = asm.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_DATATYPE")!;
+            object f64   = Enum.Parse(dataTypeEnum, "FLOAT64");
+            object str8  = Enum.Parse(dataTypeEnum, "STRING8");
+            object str32 = Enum.Parse(dataTypeEnum, "STRING32");
+            object str64 = Enum.Parse(dataTypeEnum, "STRING64");
+            uint   noId  = uint.MaxValue; // SIMCONNECT_UNUSED
 
-            object float64 = Enum.Parse(dataTypeEnum, "FLOAT64");
-            object string8 = Enum.Parse(dataTypeEnum, "STRING8");
-            object string32 = Enum.Parse(dataTypeEnum, "STRING32");
-            object string64 = Enum.Parse(dataTypeEnum, "STRING64");
-            uint unused = unchecked((uint)-1);
+            // WHY MethodInfo.Invoke instead of dynamic:
+            // C# spec §7.6.5: when an argument has compile-time type 'object', the dynamic
+            // binder treats it as 'object' for overload resolution — NOT its runtime type.
+            // So SIMCONNECT_DATATYPE boxed in object => binder sees 'object' => no match.
+            // MethodInfo.Invoke bypasses the binder and uses actual runtime types directly.
+            var addMethod = scType.GetMethods()
+                .First(m => m.Name == "AddToDataDefinition" && m.GetParameters().Length == 6);
 
-            void AddDef(string name, string units, object type) =>
-                sc.AddToDataDefinition(DefId.AircraftData, name, units, type, 0.0f, unused);
+            void Add(Enum defId, string name, string units, object type)
+            {
+                try { addMethod.Invoke(scObj, new object[] { defId, name, units, type, 0.0f, noId }); }
+                catch (TargetInvocationException tie)
+                {
+                    _logger.LogWarning("AddToDataDefinition failed for '{Name}': {Err}", name, tie.InnerException?.Message ?? tie.Message);
+                }
+            }
 
-            AddDef("PLANE LATITUDE",                   "degrees", float64);
-            AddDef("PLANE LONGITUDE",                  "degrees", float64);
-            AddDef("PLANE ALTITUDE",                   "feet",    float64);
-            AddDef("PLANE ALT ABOVE GROUND",           "feet",    float64);
-            AddDef("PLANE HEADING DEGREES TRUE",       "degrees", float64);
-            AddDef("GROUND VELOCITY",                  "knots",   float64);
-            AddDef("SIM ON GROUND",                    "bool",    float64);
-            AddDef("COM ACTIVE FREQUENCY:1",           "MHz",     float64);
-            AddDef("AMBIENT WIND VELOCITY",            "knots",   float64);
-            AddDef("AMBIENT WIND DIRECTION",           "degrees", float64);
-            // Airport ICAO — this is the key field that replaces BGL parsing!
-            // "GPS FLIGHT PLAN DEPARTURE AIRPORT" gives the departure airport ICAO as a string.
-            AddDef("GPS FLIGHT PLAN DEPARTURE AIRPORT", string.Empty, string8);
-            AddDef("ATC RUNWAY AIRPORT NAME",           string.Empty, string8); // current airport
+            // ── Aircraft data definition ───────────────────────────────────────
+            Add(DefId.AircraftData, "PLANE LATITUDE",                    "degrees", f64);
+            Add(DefId.AircraftData, "PLANE LONGITUDE",                   "degrees", f64);
+            Add(DefId.AircraftData, "PLANE ALTITUDE",                    "feet",    f64);
+            Add(DefId.AircraftData, "PLANE ALT ABOVE GROUND",            "feet",    f64);
+            Add(DefId.AircraftData, "PLANE HEADING DEGREES TRUE",        "degrees", f64);
+            Add(DefId.AircraftData, "GROUND VELOCITY",                   "knots",   f64);
+            Add(DefId.AircraftData, "SIM ON GROUND",                     "bool",    f64);
+            Add(DefId.AircraftData, "COM ACTIVE FREQUENCY:1",            "MHz",     f64);
+            Add(DefId.AircraftData, "AMBIENT WIND VELOCITY",             "knots",   f64);
+            Add(DefId.AircraftData, "AMBIENT WIND DIRECTION",            "degrees", f64);
+            Add(DefId.AircraftData, "GPS FLIGHT PLAN DEPARTURE AIRPORT", "",        str8);
+            Add(DefId.AircraftData, "ATC RUNWAY AIRPORT NAME",           "",        str8);
 
-            sc.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
+            // RegisterDataDefineStruct<T> can stay as dynamic (generic call, no boxed-object issue)
+            _simConnect.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
 
-            // Traffic definition: position + callsign for each AI aircraft
-            void AddTrafficDef(string name, string units, object type) =>
-                sc.AddToDataDefinition(DefId.TrafficData, name, units, type, 0.0f, unused);
+            // ── Traffic data definition ────────────────────────────────────────
+            Add(DefId.TrafficData, "PLANE LATITUDE",             "degrees", f64);
+            Add(DefId.TrafficData, "PLANE LONGITUDE",            "degrees", f64);
+            Add(DefId.TrafficData, "PLANE ALTITUDE",             "feet",    f64);
+            Add(DefId.TrafficData, "PLANE HEADING DEGREES TRUE", "degrees", f64);
+            Add(DefId.TrafficData, "GROUND VELOCITY",            "knots",   f64);
+            Add(DefId.TrafficData, "SIM ON GROUND",              "bool",    f64);
+            Add(DefId.TrafficData, "TITLE",                      "",        str64);
+            Add(DefId.TrafficData, "ATC ID",                     "",        str32);
+            Add(DefId.TrafficData, "ATC AIRLINE",                "",        str32);
+            Add(DefId.TrafficData, "ATC FLIGHT NUMBER",          "",        str8);
 
-            AddTrafficDef("PLANE LATITUDE",               "degrees",  float64);
-            AddTrafficDef("PLANE LONGITUDE",              "degrees",  float64);
-            AddTrafficDef("PLANE ALTITUDE",               "feet",     float64);
-            AddTrafficDef("PLANE HEADING DEGREES TRUE",   "degrees",  float64);
-            AddTrafficDef("GROUND VELOCITY",              "knots",    float64);
-            AddTrafficDef("SIM ON GROUND",                "bool",     float64);
-            AddTrafficDef("TITLE",             string.Empty, string64);
-            AddTrafficDef("ATC ID",             string.Empty, string32);
-            AddTrafficDef("ATC AIRLINE",        string.Empty, string32);
-            AddTrafficDef("ATC FLIGHT NUMBER",  string.Empty, string8);
+            _simConnect.RegisterDataDefineStruct<TrafficObjectData>(DefId.TrafficData);
 
-            sc.RegisterDataDefineStruct<TrafficObjectData>(DefId.TrafficData);
+            // System event subscriptions (no boxed-object issue here)
+            _simConnect.SubscribeToSystemEvent(EventId.OneSecond,  "1sec");
+            _simConnect.SubscribeToSystemEvent(EventId.FiveSecond, "5sec");
 
-            // Request own-ship data on 1-second intervals
-            sc.SubscribeToSystemEvent(EventId.OneSecond, "1sec");
-            // Traffic scan on 5-second intervals (heavier call)
-            sc.SubscribeToSystemEvent(EventId.FiveSecond, "5sec");
+            _logger.LogInformation("SimConnect data definitions registered successfully");
         }
         catch (Exception ex)
         {
