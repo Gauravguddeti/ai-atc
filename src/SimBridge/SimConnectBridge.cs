@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using MsfsAiAtc.Traffic;
 using System.IO;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -297,41 +299,49 @@ public class SimConnectBridge : IDisposable
         try
         {
             var sc = _simConnect;
-            // SIMCONNECT_DATATYPE: FLOAT64=8, STRING8=4, STRING32=5, STRING64=6
-            void AddDef(string name, string units, int type) =>
-                sc.AddToDataDefinition(DefId.AircraftData, name, units, type, 0.0f, -1);
+            var asm = ((object)sc).GetType().Assembly;
+            var dataTypeEnum = asm.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_DATATYPE")!;
 
-            AddDef("PLANE LATITUDE",                   "degrees", 8);
-            AddDef("PLANE LONGITUDE",                  "degrees", 8);
-            AddDef("PLANE ALTITUDE",                   "feet",    8);
-            AddDef("PLANE ALT ABOVE GROUND",           "feet",    8);
-            AddDef("PLANE HEADING DEGREES TRUE",       "degrees", 8);
-            AddDef("GROUND VELOCITY",                  "knots",   8);
-            AddDef("SIM ON GROUND",                    "bool",    8);
-            AddDef("COM ACTIVE FREQUENCY:1",           "MHz",     8);
-            AddDef("AMBIENT WIND VELOCITY",            "knots",   8);
-            AddDef("AMBIENT WIND DIRECTION",           "degrees", 8);
+            object float64 = Enum.Parse(dataTypeEnum, "FLOAT64");
+            object string8 = Enum.Parse(dataTypeEnum, "STRING8");
+            object string32 = Enum.Parse(dataTypeEnum, "STRING32");
+            object string64 = Enum.Parse(dataTypeEnum, "STRING64");
+            uint unused = unchecked((uint)-1);
+
+            void AddDef(string name, string units, object type) =>
+                sc.AddToDataDefinition(DefId.AircraftData, name, units, type, 0.0f, unused);
+
+            AddDef("PLANE LATITUDE",                   "degrees", float64);
+            AddDef("PLANE LONGITUDE",                  "degrees", float64);
+            AddDef("PLANE ALTITUDE",                   "feet",    float64);
+            AddDef("PLANE ALT ABOVE GROUND",           "feet",    float64);
+            AddDef("PLANE HEADING DEGREES TRUE",       "degrees", float64);
+            AddDef("GROUND VELOCITY",                  "knots",   float64);
+            AddDef("SIM ON GROUND",                    "bool",    float64);
+            AddDef("COM ACTIVE FREQUENCY:1",           "MHz",     float64);
+            AddDef("AMBIENT WIND VELOCITY",            "knots",   float64);
+            AddDef("AMBIENT WIND DIRECTION",           "degrees", float64);
             // Airport ICAO — this is the key field that replaces BGL parsing!
             // "GPS FLIGHT PLAN DEPARTURE AIRPORT" gives the departure airport ICAO as a string.
-            AddDef("GPS FLIGHT PLAN DEPARTURE AIRPORT", string.Empty, 4); // STRING8
-            AddDef("ATC RUNWAY AIRPORT NAME",           string.Empty, 4); // STRING8 — current airport
+            AddDef("GPS FLIGHT PLAN DEPARTURE AIRPORT", string.Empty, string8);
+            AddDef("ATC RUNWAY AIRPORT NAME",           string.Empty, string8); // current airport
 
             sc.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
 
             // Traffic definition: position + callsign for each AI aircraft
-            void AddTrafficDef(string name, string units, int type) =>
-                sc.AddToDataDefinition(DefId.TrafficData, name, units, type, 0.0f, -1);
+            void AddTrafficDef(string name, string units, object type) =>
+                sc.AddToDataDefinition(DefId.TrafficData, name, units, type, 0.0f, unused);
 
-            AddTrafficDef("PLANE LATITUDE",               "degrees",  8);
-            AddTrafficDef("PLANE LONGITUDE",              "degrees",  8);
-            AddTrafficDef("PLANE ALTITUDE",               "feet",     8);
-            AddTrafficDef("PLANE HEADING DEGREES TRUE",   "degrees",  8);
-            AddTrafficDef("GROUND VELOCITY",              "knots",    8);
-            AddTrafficDef("SIM ON GROUND",                "bool",     8);
-            AddTrafficDef("TITLE",             string.Empty, 6);  // 6 = SIMCONNECT_DATATYPE_STRING64
-            AddTrafficDef("ATC ID",             string.Empty, 5);  // 5 = SIMCONNECT_DATATYPE_STRING32
-            AddTrafficDef("ATC AIRLINE",        string.Empty, 5);
-            AddTrafficDef("ATC FLIGHT NUMBER",  string.Empty, 4);  // 4 = SIMCONNECT_DATATYPE_STRING8
+            AddTrafficDef("PLANE LATITUDE",               "degrees",  float64);
+            AddTrafficDef("PLANE LONGITUDE",              "degrees",  float64);
+            AddTrafficDef("PLANE ALTITUDE",               "feet",     float64);
+            AddTrafficDef("PLANE HEADING DEGREES TRUE",   "degrees",  float64);
+            AddTrafficDef("GROUND VELOCITY",              "knots",    float64);
+            AddTrafficDef("SIM ON GROUND",                "bool",     float64);
+            AddTrafficDef("TITLE",             string.Empty, string64);
+            AddTrafficDef("ATC ID",             string.Empty, string32);
+            AddTrafficDef("ATC AIRLINE",        string.Empty, string32);
+            AddTrafficDef("ATC FLIGHT NUMBER",  string.Empty, string8);
 
             sc.RegisterDataDefineStruct<TrafficObjectData>(DefId.TrafficData);
 
@@ -351,11 +361,11 @@ public class SimConnectBridge : IDisposable
         if (_simConnect == null) return;
         try
         {
-            _simConnect.OnRecvSimobjectData        += new Action<dynamic, dynamic>(OnReceiveSimObjectData);
-            _simConnect.OnRecvSimobjectDataBytype  += new Action<dynamic, dynamic>(OnReceiveSimObjectDataBytype);
-            _simConnect.OnRecvEvent     += new Action<dynamic, dynamic>(OnRecvEvent);
-            _simConnect.OnRecvQuit      += new Action<dynamic, dynamic>(OnRecvQuit);
-            _simConnect.OnRecvException += new Action<dynamic, dynamic>(OnRecvException);
+            SubscribeDynamic("OnRecvSimobjectData",       nameof(OnReceiveSimObjectData));
+            SubscribeDynamic("OnRecvSimobjectDataBytype", nameof(OnReceiveSimObjectDataBytype));
+            SubscribeDynamic("OnRecvEvent",               nameof(OnRecvEvent));
+            SubscribeDynamic("OnRecvQuit",                nameof(OnRecvQuit));
+            SubscribeDynamic("OnRecvException",           nameof(OnRecvException));
         }
         catch (Exception ex)
         {
@@ -363,8 +373,38 @@ public class SimConnectBridge : IDisposable
         }
     }
 
-    private void OnRecvEvent(dynamic sender, dynamic data)
+    /// <summary>
+    /// Subscribes to a SimConnect event dynamically using Expression trees.
+    /// This prevents "Cannot implicitly convert type System.Action" errors because it builds
+    /// a delegate of the exact type SimConnect expects at runtime.
+    /// </summary>
+    private void SubscribeDynamic(string eventName, string methodName)
     {
+        var scType = ((object)_simConnect!).GetType();
+        var ev = scType.GetEvent(eventName);
+        if (ev == null) return;
+
+        var delegateType = ev.EventHandlerType!;
+        var invokeParams = delegateType.GetMethod("Invoke")!.GetParameters();
+
+        var p1 = System.Linq.Expressions.Expression.Parameter(invokeParams[0].ParameterType, "sender");
+        var p2 = System.Linq.Expressions.Expression.Parameter(invokeParams[1].ParameterType, "data");
+
+        var methodInfo = this.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        // Call our internal method, casting the strongly-typed parameters to 'object'
+        var call = System.Linq.Expressions.Expression.Call(System.Linq.Expressions.Expression.Constant(this), methodInfo,
+            System.Linq.Expressions.Expression.Convert(p1, typeof(object)),
+            System.Linq.Expressions.Expression.Convert(p2, typeof(object)));
+
+        var lambda = System.Linq.Expressions.Expression.Lambda(delegateType, call, p1, p2);
+        ev.AddEventHandler(_simConnect, lambda.Compile());
+    }
+
+    private void OnRecvEvent(object sender, object dataObj)
+    {
+        dynamic data = dataObj;
+
         try
         {
             uint evId = (uint)data.uEventID;
@@ -388,8 +428,9 @@ public class SimConnectBridge : IDisposable
         catch { }
     }
 
-    private void OnReceiveSimObjectData(dynamic sender, dynamic data)
+    private void OnReceiveSimObjectData(object sender, object dataObj)
     {
+        dynamic data = dataObj;
         try
         {
             uint reqId = (uint)data.dwRequestID;
@@ -436,8 +477,9 @@ public class SimConnectBridge : IDisposable
     // Traffic is returned by RequestDataOnSimObjectType — different callback
     private readonly List<TrafficObjectData> _trafficBuffer = new();
 
-    private void OnReceiveSimObjectDataBytype(dynamic sender, dynamic data)
+    private void OnReceiveSimObjectDataBytype(object sender, object dataObj)
     {
+        dynamic data = dataObj;
         try
         {
             uint reqId     = (uint)data.dwRequestID;
@@ -467,14 +509,15 @@ public class SimConnectBridge : IDisposable
         }
     }
 
-    private void OnRecvQuit(dynamic sender, dynamic data)
+    private void OnRecvQuit(object sender, object data)
     {
         _logger.LogInformation("SimConnect: sim quit");
         HandleDisconnect();
     }
 
-    private void OnRecvException(dynamic sender, dynamic data)
+    private void OnRecvException(object sender, object dataObj)
     {
+        dynamic data = dataObj;
         _logger.LogDebug("SimConnect exception: {Code}", (object)data.dwException);
 
     }
