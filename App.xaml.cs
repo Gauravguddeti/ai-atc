@@ -139,24 +139,44 @@ public partial class App : Application
         MainWindow = _overlay;
     }
 
-    // ─── App root directory (one level above dist/ when running from dist) ─────
-
     /// <summary>
     /// Resolves the "app root" — the folder containing .env, piper/, etc.
-    /// When running from dist\MsfsAiAtc.exe the root is one level up.
-    /// When running in-place (dev) the root IS the base directory.
+    /// 
+    /// Resolution order:
+    ///   1. If exe is inside dist/, root is the parent (normal installed run).
+    ///   2. Walk up from the exe dir until we find a folder containing piper/ or .env
+    ///      (handles 'dotnet run' which puts the exe deep in bin/Release/.../win-x64/).
+    ///   3. Fall back to the exe dir itself.
     /// </summary>
     public static string AppRootDir
     {
         get
         {
             var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-            // If exe is inside a folder called "dist", root is the parent
+
+            // Case 1: running from dist\ — parent is the real root
             if (Path.GetFileName(exeDir).Equals("dist", StringComparison.OrdinalIgnoreCase))
                 return Path.GetDirectoryName(exeDir) ?? exeDir;
+
+            // Case 2: walk up until we find piper\ or .env (dev / dotnet run)
+            var dir = exeDir;
+            for (int i = 0; i < 8; i++) // max 8 levels up
+            {
+                if (Directory.Exists(Path.Combine(dir, "piper")) ||
+                    File.Exists(Path.Combine(dir, ".env"))        ||
+                    Directory.Exists(Path.Combine(dir, ".git")))
+                    return dir;
+
+                var parent = Path.GetDirectoryName(dir);
+                if (parent == null || parent == dir) break;
+                dir = parent;
+            }
+
+            // Case 3: fallback
             return exeDir;
         }
     }
+
 
     // ─── Crash handlers ───────────────────────────────────────────────────────
 
