@@ -30,7 +30,10 @@ public class VoicePipeline : IDisposable
     private WasapiCapture? _capture;
     private MemoryStream? _audioBuffer;
     private WaveFileWriter? _waveWriter;
+    private TaskCompletionSource<bool>? _recordingStoppedTcs;
+    private DateTime _recordingStartedAt;
     private bool _disposed;
+    private const int MinRecordingMs = 400; // ignore taps shorter than this
 
     // Events published to the rest of the app
     public event Action<VoiceState>? StateChanged;
@@ -92,7 +95,6 @@ public class VoicePipeline : IDisposable
         try
         {
             var device = FindMicDevice();
-            // Create fresh capture object every time (spec requirement)
             _capture = device != null
                 ? new WasapiCapture(device)
                 : new WasapiCapture();
@@ -100,6 +102,8 @@ public class VoicePipeline : IDisposable
             _capture.WaveFormat = new WaveFormat(16000, 16, 1); // 16kHz mono 16-bit
             _audioBuffer = new MemoryStream();
             _waveWriter = new WaveFileWriter(_audioBuffer, _capture.WaveFormat);
+            _recordingStoppedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _recordingStartedAt = DateTime.UtcNow;
 
             _capture.DataAvailable += OnDataAvailable;
             _capture.RecordingStopped += OnRecordingStopped;
@@ -120,8 +124,19 @@ public class VoicePipeline : IDisposable
     private void StopCaptureAndSend()
     {
         _logger.LogInformation("PTT released — stopping capture");
+
+        // Enforce minimum recording duration — avoids "too short" errors from Whisper
+        var elapsed = (DateTime.UtcNow - _recordingStartedAt).TotalMilliseconds;
+        if (elapsed < MinRecordingMs)
+        {
+            var wait = (int)(MinRecordingMs - elapsed) + 50;
+            _logger.LogDebug("Recording too short ({Ms}ms), padding {Wait}ms", (int)elapsed, wait);
+            Thread.Sleep(wait);
+        }
+
+        // Signal capture to stop — OnRecordingStopped will be called by NAudio on its thread
         _capture?.StopRecording();
-        // Actual send happens in OnRecordingStopped to ensure all data is flushed
+        // Actual send happens in OnRecordingStopped after all data is flushed
     }
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
@@ -130,21 +145,45 @@ public class VoicePipeline : IDisposable
 
         try
         {
+            // IMPORTANT: flush BEFORE reading from the MemoryStream
             _waveWriter?.Flush();
+            _waveWriter?.Dispose();
+            _waveWriter = null;
+
             if (_audioBuffer != null)
             {
                 wavBytes = _audioBuffer.ToArray();
+                _logger.LogDebug("Captured {Bytes} bytes of audio", wavBytes.Length);
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error flushing audio buffer");
         }
         finally
         {
-            // Fully dispose capture and buffer (spec: fresh buffer every time, fully disposed after use)
-            DisposeCapture();
+            // Dispose only capture and buffer — writer already disposed above
+            try
+            {
+                if (_capture != null)
+                {
+                    _capture.DataAvailable -= OnDataAvailable;
+                    _capture.RecordingStopped -= OnRecordingStopped;
+                    _capture.Dispose();
+                    _capture = null;
+                }
+                _audioBuffer?.Dispose();
+                _audioBuffer = null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Error disposing capture: {Msg}", ex.Message);
+            }
         }
 
-        if (wavBytes != null && wavBytes.Length > 44) // > WAV header only
+        // Must have more than a WAV header (44 bytes) of actual audio data
+        if (wavBytes != null && wavBytes.Length > 1000)
         {
-            // Fire async without blocking this callback
             _ = Task.Run(async () =>
             {
                 try
@@ -156,15 +195,12 @@ public class VoicePipeline : IDisposable
                 {
                     _logger.LogError(ex, "Error in audio processing pipeline");
                 }
-                finally
-                {
-                    // Return to IDLE after pipeline completes (set by pipeline consumer)
-                }
             });
         }
         else
         {
-            _logger.LogInformation("Captured audio too short — skipping");
+            _logger.LogInformation("Captured audio too short ({Bytes} bytes) — skipping",
+                wavBytes?.Length ?? 0);
             lock (_stateLock) TransitionTo(VoiceState.Idle);
         }
     }

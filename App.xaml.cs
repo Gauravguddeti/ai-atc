@@ -158,9 +158,15 @@ public partial class App : Application
             if (Path.GetFileName(exeDir).Equals("dist", StringComparison.OrdinalIgnoreCase))
                 return Path.GetDirectoryName(exeDir) ?? exeDir;
 
-            // Case 2: walk up until we find piper\ or .env (dev / dotnet run)
+            // Case 2: check CWD first — dotnet run is executed FROM the project folder
+            var cwd = Directory.GetCurrentDirectory();
+            if (Directory.Exists(Path.Combine(cwd, "piper")) ||
+                File.Exists(Path.Combine(cwd, ".env")))
+                return cwd;
+
+            // Case 3: walk up from exe dir until we find piper\ or .env
             var dir = exeDir;
-            for (int i = 0; i < 8; i++) // max 8 levels up
+            for (int i = 0; i < 8; i++)
             {
                 if (Directory.Exists(Path.Combine(dir, "piper")) ||
                     File.Exists(Path.Combine(dir, ".env"))        ||
@@ -172,7 +178,7 @@ public partial class App : Application
                 dir = parent;
             }
 
-            // Case 3: fallback
+            // Case 4: fallback
             return exeDir;
         }
     }
