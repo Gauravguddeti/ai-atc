@@ -1,4 +1,4 @@
-# MSFS AI ATC — Setup Helper Script
+# MSFS AI ATC â€” Setup Helper Script
 # Downloads Piper TTS binaries, voice model, and worldwide airport database.
 # Run from the repo root: .\setup-piper.ps1
 
@@ -72,9 +72,9 @@ if (Test-Path $JsonPath) {
     }
 }
 
-# ── Step 4: Airport + Runway database (from OurAirports.com) ─────────────────
+# â”€â”€ Step 4: Airport + Runway database (from OurAirports.com) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # This replaces BGL file parsing. MSFS 2020's Official BGLs use Asobo's
-# proprietary format — our FSX parser gets 0 airports from 6000+ files.
+# proprietary format â€” our FSX parser gets 0 airports from 6000+ files.
 # OurAirports gives us 80,000+ worldwide airports in a clean CSV format.
 $AirportsCsv = Join-Path $DataDir "airports.csv"
 $RunwaysCsv  = Join-Path $DataDir "runways.csv"
@@ -89,7 +89,7 @@ if (Test-Path $AirportsCsv) {
             -OutFile $AirportsCsv -UseBasicParsing
         Write-Host "  [4/4] airports.csv downloaded" -ForegroundColor Green
     } catch {
-        Write-Host "  [4/4] WARNING: Could not download airports.csv — airport detection will be limited" -ForegroundColor Red
+        Write-Host "  [4/4] WARNING: Could not download airports.csv â€” airport detection will be limited" -ForegroundColor Red
     }
 }
 

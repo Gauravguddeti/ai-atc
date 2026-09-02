@@ -172,50 +172,56 @@ public partial class OverlayWindow : Window
 
     public void AddPilotMessage(string text)
     {
-        AddEntry(new ChatEntry
+        Dispatcher.InvokeAsync(() =>
         {
-            Prefix      = "YOU",
-            Text        = text,
-            IsPilot     = true,
-            PrefixColor = _pilotBrush,
-            TextColor   = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF))
+            _chatEntries.Add(new ChatEntry
+            {
+                Prefix      = "YOU",
+                Text        = text,
+                IsPilot     = true,
+                PrefixColor = _pilotBrush,
+                TextColor   = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF))
+            });
+            TrimAndScroll();
         });
     }
 
     public void AddAtcMessage(string text, string controllerLabel = "ATC")
     {
-        AddEntry(new ChatEntry
+        Dispatcher.InvokeAsync(() =>
         {
-            Prefix = controllerLabel.ToUpper(),
-            Text = text,
-            PrefixColor = _atcBrush,
-            TextColor = new SolidColorBrush(Color.FromRgb(0xE8, 0xEA, 0xF6))
+            _chatEntries.Add(new ChatEntry
+            {
+                Prefix      = controllerLabel.ToUpper(),
+                Text        = text,
+                PrefixColor = _atcBrush,
+                TextColor   = new SolidColorBrush(Color.FromRgb(0xE8, 0xEA, 0xF6))
+            });
+            TrimAndScroll();
         });
     }
 
     public void AddSystemMessage(string text)
     {
-        AddEntry(new ChatEntry
+        Dispatcher.InvokeAsync(() =>
         {
-            Prefix    = "·",
-            Text      = text,
-            IsSystem  = true,
-            PrefixColor = _systemBrush,
-            TextColor   = _systemBrush
+            _chatEntries.Add(new ChatEntry
+            {
+                Prefix      = "·",
+                Text        = text,
+                IsSystem    = true,
+                PrefixColor = _systemBrush,
+                TextColor   = _systemBrush
+            });
+            TrimAndScroll();
         });
     }
 
-    private void AddEntry(ChatEntry entry)
+    private void TrimAndScroll()
     {
-        Dispatcher.InvokeAsync(() =>
-        {
-            _chatEntries.Add(entry);
-            // Trim log
-            while (_chatEntries.Count > MaxLogEntries)
-                _chatEntries.RemoveAt(0);
-            // Auto-scroll to bottom
-            ChatScroll.ScrollToBottom();
-        });
+        while (_chatEntries.Count > MaxLogEntries)
+            _chatEntries.RemoveAt(0);
+        ChatScroll.ScrollToBottom();
     }
 
     // ─── Pulse animation ──────────────────────────────────────────────────────
