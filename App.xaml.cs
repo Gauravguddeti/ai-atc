@@ -353,9 +353,9 @@ public partial class App : Application
             }
             else
             {
-                // Piper not available — log and continue without audio
-                _overlay.AddSystemMessage("[TTS unavailable — install Piper via setup wizard]");
-                await Task.Delay(1000, ct); // brief pause to simulate speaking time
+                // Piper binary or model not found at expected path — silent fallback
+                _loggerFactory.CreateLogger<App>().LogWarning("TTS skipped — Piper not available at configured path");
+                await Task.Delay(800, ct); // brief pause to simulate speaking time
             }
         }
         finally

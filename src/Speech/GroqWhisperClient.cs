@@ -16,7 +16,21 @@ public class GroqWhisperClient
     private readonly string[] _apiKeys;
     private int _keyIndex = 0;
     private const string EndpointUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
-    private const string Model = "whisper-large-v3-turbo";
+    // whisper-large-v3 has significantly better accuracy than turbo for domain-specific speech
+    private const string Model = "whisper-large-v3";
+
+    // Priming prompt — Whisper uses this to bias recognition toward aviation vocabulary.
+    // This single string dramatically reduces errors like "Poneground" -> "Pune Ground",
+    // "three zero two" being recognised correctly, and ICAO phrases being preserved.
+    private const string AviationPrompt =
+        "Aviation ATC radio communication. ICAO standard phraseology. " +
+        "Airports: Pune VAPO, Mumbai VABB, Delhi VIDP, Hyderabad VOHS, Bangalore VOBL, Chennai VOMM, Karachi OPKC, Lahore OPLA. " +
+        "Airlines: Air India, IndiGo, SpiceJet, GoAir, Vistara, Emirates, Etihad, Qatar, Speedbird. " +
+        "Common phrases: request taxi, request pushback, request startup, cleared for takeoff, " +
+        "cleared to land, hold short, line up and wait, go around, wilco, roger, affirm, negative, " +
+        "stand by, say again, radio check, request IFR clearance, maintain runway heading. " +
+        "Numbers spoken digit by digit: zero one two three four five six seven eight nine. " +
+        "Flight levels and altitudes in feet. Headings in degrees. Speeds in knots.";
 
     public GroqWhisperClient(ILogger<GroqWhisperClient> logger, HttpClient http, string[] apiKeys)
     {
@@ -62,6 +76,7 @@ public class GroqWhisperClient
                 form.Add(new StringContent(Model), "model");
                 form.Add(new StringContent("en"), "language");
                 form.Add(new StringContent("json"), "response_format");
+                form.Add(new StringContent(AviationPrompt), "prompt");
 
                 using var request = new HttpRequestMessage(HttpMethod.Post, EndpointUrl);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);

@@ -60,6 +60,16 @@ public static class ConfigLoader
         var modelsDir  = Path.Combine(piperDir, "models");
         var voiceName  = Env.GetString("PIPER_VOICE", "en_US-lessac-medium");
 
+        // Piper binary: the GitHub release zip extracts as piper/piper/piper.exe (double-piper)
+        // but some setups may place it flat at piper/piper.exe — try both.
+        var piperExeDoubleNested = Path.Combine(piperDir, "piper", "piper.exe");
+        var piperExeFlat         = Path.Combine(piperDir, "piper.exe");
+        var piperExePath = File.Exists(piperExeDoubleNested) ? piperExeDoubleNested
+                         : File.Exists(piperExeFlat)         ? piperExeFlat
+                         : piperExeDoubleNested; // fallback to canonical path for logging
+
+        var piperModelPath = Path.Combine(modelsDir, voiceName + ".onnx");
+
         var config = new AppConfig
         {
             GroqApiKey    = Env.GetString("GROQ_API_KEY",   string.Empty),
@@ -69,9 +79,8 @@ public static class ConfigLoader
             OutputDeviceId= Env.GetString("OUTPUT_DEVICE_ID", string.Empty),
             PiperVoice    = voiceName,
             LogLevel      = Env.GetString("LOG_LEVEL", "info"),
-            // Piper exe: piper\piper\piper.exe  (inside the extracted zip structure)
-            PiperExePath  = Path.Combine(piperDir, "piper", "piper.exe"),
-            PiperModelPath= Path.Combine(modelsDir, voiceName + ".onnx"),
+            PiperExePath  = piperExePath,
+            PiperModelPath= piperModelPath,
         };
 
         logger?.LogInformation("Root dir: {Root}", rootDir);
