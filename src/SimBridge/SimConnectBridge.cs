@@ -23,11 +23,6 @@ public struct AircraftData
     public double Com1Freq;
     public double WindSpeed;
     public double WindDirection;
-    // Airport ICAO from SimConnect — replaces BGL parsing for airport identification
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]
-    public string DepartureAirportIcao;   // GPS FLIGHT PLAN DEPARTURE AIRPORT
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]
-    public string CurrentAirportIcao;     // ATC RUNWAY AIRPORT NAME
 }
 
 /// <summary>
@@ -338,8 +333,6 @@ public class SimConnectBridge : IDisposable
             Add(DefId.AircraftData, "COM ACTIVE FREQUENCY:1",            "MHz",     f64);
             Add(DefId.AircraftData, "AMBIENT WIND VELOCITY",             "knots",   f64);
             Add(DefId.AircraftData, "AMBIENT WIND DIRECTION",            "degrees", f64);
-            Add(DefId.AircraftData, "GPS FLIGHT PLAN DEPARTURE AIRPORT", "",        str8);
-            Add(DefId.AircraftData, "ATC RUNWAY AIRPORT NAME",           "",        str8);
 
             // RegisterDataDefineStruct<T> can stay as dynamic (generic call, no boxed-object issue)
             _simConnect.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
@@ -508,17 +501,6 @@ public class SimConnectBridge : IDisposable
                 _state.WindDirectionDeg = d.WindDirection;
                 _state.SimTime          = DateTime.UtcNow;
                 _state.LastUpdated      = DateTime.UtcNow;
-
-                var currentIcao = d.CurrentAirportIcao?.Trim();
-                var departIcao  = d.DepartureAirportIcao?.Trim();
-                var bestIcao    = !string.IsNullOrWhiteSpace(currentIcao) ? currentIcao : departIcao;
-
-                if (!string.IsNullOrWhiteSpace(bestIcao) && bestIcao != _state.NearestAirportIcao)
-                {
-                    _state.NearestAirportIcao = bestIcao;
-                    _logger.LogInformation("Airport from SimConnect: {Icao} (current={C} depart={D})",
-                        bestIcao, currentIcao, departIcao);
-                }
 
                 StateUpdated?.Invoke(_state);
             }

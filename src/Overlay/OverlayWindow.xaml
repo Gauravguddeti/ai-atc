@@ -174,26 +174,39 @@
                     <ItemsControl x:Name="ChatLog">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type local:ChatEntry}">
-                                <Grid Margin="0,3">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="{Binding Prefix}"
-                                               FontFamily="{StaticResource MonoFont}"
-                                               FontSize="11" FontWeight="Bold"
-                                               Foreground="{Binding PrefixColor}"
-                                               Width="50" TextAlignment="Right"
-                                               Margin="0,0,8,0"
-                                               VerticalAlignment="Top"/>
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding Text}"
-                                               FontFamily="{StaticResource UiFont}"
-                                               FontSize="12"
-                                               Foreground="{Binding TextColor}"
-                                               TextWrapping="Wrap"/>
-                                </Grid>
+                                <Border Margin="0,4,0,4" Padding="10,8" CornerRadius="8" MaxWidth="400">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <!-- Default style for System/ATC messages -->
+                                            <Setter Property="Background" Value="#1AFFFFFF"/>
+                                            <Setter Property="HorizontalAlignment" Value="Left"/>
+                                            <Style.Triggers>
+                                                <!-- Pilot messages align right with a blueish background -->
+                                                <DataTrigger Binding="{Binding Prefix}" Value="PILOT">
+                                                    <Setter Property="Background" Value="#2A4DA6FF"/>
+                                                    <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                </DataTrigger>
+                                                <!-- System messages have a subtle background -->
+                                                <DataTrigger Binding="{Binding Prefix}" Value="·">
+                                                    <Setter Property="Background" Value="Transparent"/>
+                                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Prefix}" 
+                                                   FontFamily="{StaticResource UiFont}" 
+                                                   FontSize="10" FontWeight="Bold" 
+                                                   Foreground="{Binding PrefixColor}" 
+                                                   Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding Text}" 
+                                                   FontFamily="{StaticResource UiFont}" 
+                                                   FontSize="12" 
+                                                   Foreground="{Binding TextColor}" 
+                                                   TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
