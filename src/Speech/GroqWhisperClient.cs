@@ -24,13 +24,16 @@ public class GroqWhisperClient
     // "three zero two" being recognised correctly, and ICAO phrases being preserved.
     private const string AviationPrompt =
         "Aviation ATC radio communication. ICAO standard phraseology. " +
-        "Airports: Pune VAPO, Mumbai VABB, Delhi VIDP, Hyderabad VOHS, Bangalore VOBL, Chennai VOMM, Karachi OPKC, Lahore OPLA. " +
-        "Airlines: Air India, IndiGo, SpiceJet, GoAir, Vistara, Emirates, Etihad, Qatar, Speedbird. " +
+        "ICAO phonetic alphabet: Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima Mike November Oscar Papa Quebec Romeo Sierra Tango Uniform Victor Whiskey X-ray Yankee Zulu. " +
+        "ICAO numbers spoken digit by digit: zero, one, two, tree (3), fower (4), fife (5), six, seven, eight, niner (9). " +
+        "Niner means 9. Tree means 3. Fower means 4. Fife means 5. " +
+        "Airports: Pune VAPO, Mumbai VABB, Delhi VIDP, Hyderabad VOHS, Bangalore VOBL, Chennai VOMM. " +
+        "Airlines: Air India, IndiGo, SpiceJet, GoAir, Vistara, Emirates, Etihad, Qatar, Speedbird, British Airways. " +
         "Common phrases: request taxi, request pushback, request startup, cleared for takeoff, " +
         "cleared to land, hold short, line up and wait, go around, wilco, roger, affirm, negative, " +
-        "stand by, say again, radio check, request IFR clearance, maintain runway heading. " +
-        "Numbers spoken digit by digit: zero one two three four five six seven eight nine. " +
-        "Flight levels and altitudes in feet. Headings in degrees. Speeds in knots.";
+        "stand by, say again, radio check, request IFR clearance, maintain runway heading, " +
+        "passing through, climbing to, descending to, request direct. " +
+        "Flight levels: Flight Level three zero zero. Altitudes in feet. Speeds in knots. Headings in degrees.";
 
     public GroqWhisperClient(ILogger<GroqWhisperClient> logger, HttpClient http, string[] apiKeys)
     {

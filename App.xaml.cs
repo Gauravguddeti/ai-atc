@@ -311,6 +311,17 @@ public partial class App : Application
                 return;
             }
 
+            // Step 1b: Reject Whisper hallucinations on silence/background audio.
+            // Whisper sometimes generates these stock phrases when it hears ambient
+            // noise, music, or very short audio that isn't real speech.
+            if (IsWhisperHallucination(transcript))
+            {
+                var logger = _loggerFactory.CreateLogger<App>();
+                logger.LogWarning("Whisper hallucination rejected: {T}", transcript);
+                _voicePipeline.SetIdle();
+                return;
+            }
+
             _overlay.AddPilotMessage(transcript);
 
             // Step 2: LLM
@@ -320,6 +331,9 @@ public partial class App : Application
 
             if (string.IsNullOrWhiteSpace(atcResponse))
             {
+                var logger = _loggerFactory.CreateLogger<App>();
+                logger.LogWarning("LLM returned empty response for transcript: {T}", transcript);
+                _overlay.AddSystemMessage("[ATC busy — say again]");
                 _voicePipeline.SetIdle();
                 return;
             }
@@ -345,6 +359,28 @@ public partial class App : Application
             _overlay.AddSystemMessage($"Error: {ex.Message}");
             _voicePipeline.SetIdle();
         }
+    }
+
+    private static bool IsWhisperHallucination(string transcript)
+    {
+        var t = transcript.Trim().ToLowerInvariant().TrimEnd('.', '!', '?', ',');
+        var hallucinations = new[]
+        {
+            "thank you for watching",
+            "thanks for watching",
+            "please subscribe",
+            "like and subscribe",
+            "don't forget to subscribe",
+            "see you next time",
+            "see you in the next video",
+            "subtitles by",
+            "transcribed by",
+            "you",
+        };
+        foreach (var h in hallucinations)
+            if (t == h || t.StartsWith(h)) return true;
+        if (transcript.Trim().Length < 3) return true;
+        return false;
     }
 
     private async Task SpeakAtcResponse(string text, CancellationToken ct)
