@@ -13,15 +13,24 @@ public class GroqWhisperClient
 {
     private readonly ILogger<GroqWhisperClient> _logger;
     private readonly HttpClient _http;
-    private readonly string _apiKey;
+    private readonly string[] _apiKeys;
+    private int _keyIndex = 0;
     private const string EndpointUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
     private const string Model = "whisper-large-v3-turbo";
 
-    public GroqWhisperClient(ILogger<GroqWhisperClient> logger, HttpClient http, string apiKey)
+    public GroqWhisperClient(ILogger<GroqWhisperClient> logger, HttpClient http, string[] apiKeys)
     {
         _logger = logger;
         _http = http;
-        _apiKey = apiKey;
+        _apiKeys = apiKeys.Where(k => !string.IsNullOrWhiteSpace(k)).ToArray();
+    }
+
+    private string GetNextKey()
+    {
+        if (_apiKeys.Length == 0) return string.Empty;
+        var key = _apiKeys[_keyIndex];
+        _keyIndex = (_keyIndex + 1) % _apiKeys.Length;
+        return key;
     }
 
     /// <summary>
@@ -43,7 +52,13 @@ public class GroqWhisperClient
             form.Add(new StringContent("json"), "response_format");
 
             using var request = new HttpRequestMessage(HttpMethod.Post, EndpointUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            var keyToUse = GetNextKey();
+            if (string.IsNullOrEmpty(keyToUse))
+            {
+                _logger.LogWarning("Whisper API error: No API keys configured.");
+                return null;
+            }
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", keyToUse);
             request.Content = form;
 
             using var response = await _http.SendAsync(request, ct);

@@ -81,7 +81,8 @@ public partial class App : Application
 
         // 5. Services
         _whisperClient = new GroqWhisperClient(
-            _loggerFactory.CreateLogger<GroqWhisperClient>(), _httpClient, _config.GroqApiKey);
+            _loggerFactory.CreateLogger<GroqWhisperClient>(), _httpClient, 
+            new[] { _config.GroqApiKey, _config.GroqApiKey2 });
 
         _piperTts = new PiperTtsWrapper(
             _loggerFactory.CreateLogger<PiperTtsWrapper>(), _config.PiperExePath, _config.PiperModelPath);
