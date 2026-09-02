@@ -14,10 +14,14 @@ namespace MsfsAiAtc.Overlay;
 /// </summary>
 public class ChatEntry
 {
-    public string Prefix { get; set; } = string.Empty;
-    public string Text { get; set; } = string.Empty;
-    public Brush PrefixColor { get; set; } = Brushes.White;
-    public Brush TextColor { get; set; } = Brushes.White;
+    public string  Prefix            { get; set; } = string.Empty;
+    public string  Text              { get; set; } = string.Empty;
+    public Brush   PrefixColor       { get; set; } = Brushes.White;
+    public Brush   TextColor         { get; set; } = Brushes.White;
+    public bool    IsPilot           { get; set; } = false;
+    public bool    IsSystem          { get; set; } = false;
+    /// Hides the Prefix row for system messages (which use just one line)
+    public Visibility PrefixVisibility => IsSystem ? Visibility.Collapsed : Visibility.Visible;
 }
 
 /// <summary>
@@ -170,10 +174,11 @@ public partial class OverlayWindow : Window
     {
         AddEntry(new ChatEntry
         {
-            Prefix = "PILOT",
-            Text = text,
+            Prefix      = "YOU",
+            Text        = text,
+            IsPilot     = true,
             PrefixColor = _pilotBrush,
-            TextColor = new SolidColorBrush(Color.FromRgb(0xFF, 0xCD, 0x8A))
+            TextColor   = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF))
         });
     }
 
@@ -192,10 +197,11 @@ public partial class OverlayWindow : Window
     {
         AddEntry(new ChatEntry
         {
-            Prefix = "·",
-            Text = text,
+            Prefix    = "·",
+            Text      = text,
+            IsSystem  = true,
             PrefixColor = _systemBrush,
-            TextColor = _systemBrush
+            TextColor   = _systemBrush
         });
     }
 

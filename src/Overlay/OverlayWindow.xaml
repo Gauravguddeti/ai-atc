@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:MsfsAiAtc.Overlay"
         Title="MSFS AI ATC"
-        Width="480" Height="360"
-        MinWidth="340" MinHeight="200"
+        Width="520" Height="420"
+        MinWidth="380" MinHeight="260"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -14,100 +14,99 @@
         Left="20" Top="20">
 
     <Window.Resources>
-        <!-- Color palette -->
-        <Color x:Key="BackgroundColor">#CC0A0E1A</Color>
-        <Color x:Key="AccentAmberColor">#FFCD8A</Color>
-        <Color x:Key="AccentBlueColor">#4DA6FF</Color>
-        <Color x:Key="TextPrimaryColor">#E8EAF6</Color>
-        <Color x:Key="TextSecondaryColor">#8899BB</Color>
-        <Color x:Key="PilotTextColor">#FFCD8A</Color>
-        <Color x:Key="AtcTextColor">#66BB8E</Color>
-        <Color x:Key="DangerColor">#FF5555</Color>
+        <!-- Core palette (SayIntentions-inspired dark theme) -->
+        <SolidColorBrush x:Key="WinBg"         Color="#E6141820"/>
+        <SolidColorBrush x:Key="HeaderBg"      Color="#FF0F1117"/>
+        <SolidColorBrush x:Key="InfoBg"        Color="#FF181C26"/>
+        <SolidColorBrush x:Key="ChatBg"        Color="#FF111318"/>
+        <SolidColorBrush x:Key="FooterBg"      Color="#FF0F1117"/>
+        <SolidColorBrush x:Key="PilotBubble"   Color="#FF5B4FCF"/>   <!-- purple like SayIntentions pilot -->
+        <SolidColorBrush x:Key="AtcBubble"     Color="#FF1B3A2E"/>   <!-- dark green for ATC -->
+        <SolidColorBrush x:Key="SysFg"         Color="#FF6677AA"/>
+        <SolidColorBrush x:Key="PilotFg"       Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="AtcFg"         Color="#FFD4F0E0"/>
+        <SolidColorBrush x:Key="AccentGreen"   Color="#FF4CAF82"/>
+        <SolidColorBrush x:Key="AccentPurple"  Color="#FF7C6FF7"/>
+        <SolidColorBrush x:Key="AccentAmber"   Color="#FFFFCD8A"/>
+        <SolidColorBrush x:Key="AccentRed"     Color="#FFFF5555"/>
+        <SolidColorBrush x:Key="TextMuted"     Color="#FF8899BB"/>
+        <SolidColorBrush x:Key="TextPrimary"   Color="#FFE8EAF6"/>
+        <FontFamily x:Key="Ui">Segoe UI, Arial</FontFamily>
+        <FontFamily x:Key="Mono">Cascadia Code, Consolas, Courier New</FontFamily>
 
-        <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource BackgroundColor}"/>
-        <SolidColorBrush x:Key="AccentAmberBrush" Color="{StaticResource AccentAmberColor}"/>
-        <SolidColorBrush x:Key="AccentBlueBrush" Color="{StaticResource AccentBlueColor}"/>
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimaryColor}"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}"/>
-        <SolidColorBrush x:Key="PilotTextBrush" Color="{StaticResource PilotTextColor}"/>
-        <SolidColorBrush x:Key="AtcTextBrush" Color="{StaticResource AtcTextColor}"/>
-
-        <!-- Fonts -->
-        <FontFamily x:Key="MonoFont">Cascadia Code, Consolas, Courier New</FontFamily>
-        <FontFamily x:Key="UiFont">Segoe UI, Arial</FontFamily>
-
-        <!-- Status dot style -->
-        <Style x:Key="StatusDot" TargetType="Ellipse">
-            <Setter Property="Width" Value="8"/>
-            <Setter Property="Height" Value="8"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
+        <!-- Frequency chip style -->
+        <Style x:Key="FreqChip" TargetType="Border">
+            <Setter Property="CornerRadius"    Value="4"/>
+            <Setter Property="Padding"         Value="8,3"/>
+            <Setter Property="Margin"          Value="4,0,0,0"/>
+            <Setter Property="Background"      Value="#FF1E2230"/>
         </Style>
-
-        <!-- Chat message item template selector will be handled in code-behind -->
     </Window.Resources>
 
-    <!-- Root border for rounded glass look -->
-    <Border CornerRadius="12"
-            Background="{StaticResource BackgroundBrush}"
-            BorderBrush="#334DA6FF"
+    <!-- Root glass border -->
+    <Border CornerRadius="10"
+            Background="{StaticResource WinBg}"
+            BorderBrush="#44FFFFFF"
             BorderThickness="1">
         <Border.Effect>
-            <DropShadowEffect Color="#000000" BlurRadius="24" ShadowDepth="0" Opacity="0.7"/>
+            <DropShadowEffect Color="#000" BlurRadius="28" ShadowDepth="0" Opacity="0.75"/>
         </Border.Effect>
 
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>  <!-- Title bar -->
-                <RowDefinition Height="Auto"/>  <!-- Status bar -->
-                <RowDefinition Height="*"/>     <!-- Chat log -->
-                <RowDefinition Height="Auto"/>  <!-- PTT status footer -->
+                <RowDefinition Height="Auto"/>  <!-- drag / title bar -->
+                <RowDefinition Height="Auto"/>  <!-- COM freq chips -->
+                <RowDefinition Height="Auto"/>  <!-- airport info -->
+                <RowDefinition Height="*"/>     <!-- chat log -->
+                <RowDefinition Height="Auto"/>  <!-- PTT footer -->
             </Grid.RowDefinitions>
 
-            <!-- ═══ TITLE BAR (drag handle) ═════════════════════════════════ -->
+            <!-- ═══ DRAG / TITLE BAR ═══════════════════════════════════════════ -->
             <Border Grid.Row="0"
-                    Background="#1A1E2E"
-                    CornerRadius="12,12,0,0"
+                    Background="{StaticResource HeaderBg}"
+                    CornerRadius="10,10,0,0"
                     MouseDown="TitleBar_MouseDown"
-                    Cursor="SizeAll">
-                <Grid Margin="12,8">
+                    Cursor="SizeAll"
+                    Padding="12,8">
+                <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- App wordmark -->
+                    <!-- Headset icon + brand -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- Amber accent bar -->
-                        <Border Width="3" Height="16" Background="{StaticResource AccentAmberBrush}"
-                                CornerRadius="2" Margin="0,0,8,0"/>
-                        <TextBlock Text="AI" FontFamily="{StaticResource UiFont}"
-                                   FontSize="13" FontWeight="Bold"
-                                   Foreground="{StaticResource AccentAmberBrush}"/>
-                        <TextBlock Text=" ATC" FontFamily="{StaticResource UiFont}"
-                                   FontSize="13" FontWeight="Bold"
-                                   Foreground="{StaticResource TextPrimaryBrush}"/>
-                        <TextBlock x:Name="AirportLabel" Text=""
-                                   FontFamily="{StaticResource UiFont}"
-                                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
-                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="🎧" FontSize="15" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="AI" FontFamily="{StaticResource Ui}" FontSize="13" FontWeight="Bold"
+                                   Foreground="{StaticResource AccentPurple}" VerticalAlignment="Center"/>
+                        <TextBlock Text=" ATC" FontFamily="{StaticResource Ui}" FontSize="13" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- SimConnect dot + status -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Ellipse x:Name="SimDot" Width="8" Height="8" Margin="0,0,6,0"
+                                 Fill="{StaticResource AccentRed}"/>
+                        <TextBlock x:Name="SimStatusText" Text="SIM: Disconnected"
+                                   FontFamily="{StaticResource Ui}" FontSize="10"
+                                   Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
                     </StackPanel>
 
                     <!-- Close button -->
-                    <Button Grid.Column="1" x:Name="CloseBtn" Content="✕"
-                            Background="Transparent" BorderThickness="0"
-                            Foreground="{StaticResource TextSecondaryBrush}"
+                    <Button Grid.Column="2" x:Name="CloseBtn" Content="✕"
                             FontSize="12" Cursor="Hand"
-                            Click="CloseBtn_Click"
-                            Padding="6,0">
+                            Foreground="{StaticResource TextMuted}"
+                            Click="CloseBtn_Click" Padding="6,0">
                         <Button.Style>
                             <Style TargetType="Button">
-                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Background"   Value="Transparent"/>
                                 <Setter Property="BorderThickness" Value="0"/>
                                 <Setter Property="Template">
                                     <Setter.Value>
                                         <ControlTemplate TargetType="Button">
-                                            <Border Background="{TemplateBinding Background}"
-                                                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                    Padding="{TemplateBinding Padding}">
                                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
                                             <ControlTemplate.Triggers>
@@ -125,106 +124,111 @@
                 </Grid>
             </Border>
 
-            <!-- ═══ STATUS BAR ══════════════════════════════════════════════ -->
-            <Border Grid.Row="1" Background="#0F121C" Padding="12,6">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+            <!-- ═══ COM FREQUENCY CHIPS ══════════════════════════════════════════ -->
+            <Border Grid.Row="1" Background="{StaticResource HeaderBg}"
+                    Padding="10,5" BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Active freq chip -->
+                    <Border Style="{StaticResource FreqChip}" Background="#FF2D3250">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="ControllerLabel" Text="Ground"
+                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentPurple}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="FreqLabel" Text=""
+                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentGreen}"
+                                       Margin="6,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
 
-                    <!-- SimConnect status -->
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Ellipse x:Name="SimDot" Style="{StaticResource StatusDot}" Fill="#FF5555"/>
-                        <TextBlock x:Name="SimStatusText" Text="SIM: Disconnected"
-                                   FontFamily="{StaticResource UiFont}" FontSize="10"
-                                   Foreground="{StaticResource TextSecondaryBrush}"/>
-                    </StackPanel>
-
-                    <!-- Separator -->
-                    <Rectangle Grid.Column="1" Width="1" Height="12" Fill="#33FFFFFF"
-                               Margin="10,0"/>
-
-                    <!-- Controller & Frequency -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock x:Name="ControllerLabel" Text="Ground"
-                                   FontFamily="{StaticResource UiFont}" FontSize="10" FontWeight="SemiBold"
-                                   Foreground="{StaticResource AccentBlueBrush}"/>
-                        <TextBlock x:Name="FreqLabel" Text=""
-                                   FontFamily="{StaticResource MonoFont}" FontSize="10"
-                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                   Margin="6,0,0,0"/>
-                    </StackPanel>
+                    <!-- Airport chip -->
+                    <Border Style="{StaticResource FreqChip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="OPDB " FontSize="9" Foreground="{StaticResource TextMuted}"
+                                       FontFamily="{StaticResource Ui}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="AirportLabel" Text="---"
+                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
 
                     <!-- PTT key hint -->
-                    <TextBlock Grid.Column="3" x:Name="PttKeyHint" Text=""
-                               FontFamily="{StaticResource UiFont}" FontSize="10"
-                               Foreground="{StaticResource TextSecondaryBrush}"/>
-                </Grid>
+                    <Border Style="{StaticResource FreqChip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="PTT " FontSize="9" Foreground="{StaticResource TextMuted}"
+                                       FontFamily="{StaticResource Ui}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="PttKeyHint" Text="[CAPS]"
+                                       FontFamily="{StaticResource Mono}" FontSize="10" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
             </Border>
 
-            <!-- ═══ CHAT LOG ════════════════════════════════════════════════ -->
-            <Border Grid.Row="2" Background="Transparent" Padding="10,6">
+            <!-- ═══ CHAT LOG ══════════════════════════════════════════════════════ -->
+            <Border Grid.Row="3" Background="{StaticResource ChatBg}" Padding="8,6">
                 <ScrollViewer x:Name="ChatScroll"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
-                              CanContentScroll="True">
+                              CanContentScroll="False">
                     <ItemsControl x:Name="ChatLog">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type local:ChatEntry}">
-                                <Border Margin="0,4,0,4" Padding="10,8" CornerRadius="8" MaxWidth="400">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <!-- Default style for System/ATC messages -->
-                                            <Setter Property="Background" Value="#1AFFFFFF"/>
-                                            <Setter Property="HorizontalAlignment" Value="Left"/>
-                                            <Style.Triggers>
-                                                <!-- Pilot messages align right with a blueish background -->
-                                                <DataTrigger Binding="{Binding Prefix}" Value="PILOT">
-                                                    <Setter Property="Background" Value="#2A4DA6FF"/>
-                                                    <Setter Property="HorizontalAlignment" Value="Right"/>
-                                                </DataTrigger>
-                                                <!-- System messages have a subtle background -->
-                                                <DataTrigger Binding="{Binding Prefix}" Value="·">
-                                                    <Setter Property="Background" Value="Transparent"/>
-                                                    <Setter Property="HorizontalAlignment" Value="Center"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Prefix}" 
-                                                   FontFamily="{StaticResource UiFont}" 
-                                                   FontSize="10" FontWeight="Bold" 
-                                                   Foreground="{Binding PrefixColor}" 
-                                                   Margin="0,0,0,2"/>
-                                        <TextBlock Text="{Binding Text}" 
-                                                   FontFamily="{StaticResource UiFont}" 
-                                                   FontSize="12" 
-                                                   Foreground="{Binding TextColor}" 
-                                                   TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </Border>
+                                <!-- Each row is a full-width Grid so bubbles can align left or right -->
+                                <Grid Margin="0,3">
+                                    <Border x:Name="BubbleBorder"
+                                            Padding="10,7" CornerRadius="8"
+                                            MaxWidth="370" HorizontalAlignment="Left">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource AtcBubble}"/>
+                                                <Setter Property="HorizontalAlignment" Value="Left"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsPilot}" Value="True">
+                                                        <Setter Property="Background" Value="{StaticResource PilotBubble}"/>
+                                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsSystem}" Value="True">
+                                                        <Setter Property="Background" Value="Transparent"/>
+                                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Prefix}"
+                                                       FontFamily="{StaticResource Ui}"
+                                                       FontSize="9" FontWeight="Bold"
+                                                       Foreground="{Binding PrefixColor}"
+                                                       Margin="0,0,0,2"
+                                                       Visibility="{Binding PrefixVisibility}"/>
+                                            <TextBlock Text="{Binding Text}"
+                                                       FontFamily="{StaticResource Ui}"
+                                                       FontSize="12"
+                                                       Foreground="{Binding TextColor}"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
             </Border>
 
-            <!-- ═══ PTT FOOTER ══════════════════════════════════════════════ -->
-            <Border Grid.Row="3"
-                    Background="#0F121C"
-                    CornerRadius="0,0,12,12"
-                    Padding="12,8">
+            <!-- ═══ PTT FOOTER ═══════════════════════════════════════════════════ -->
+            <Border Grid.Row="4"
+                    Background="{StaticResource FooterBg}"
+                    CornerRadius="0,0,10,10"
+                    Padding="10,7"
+                    BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- State label -->
+                    <!-- State indicator -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse x:Name="StateDot" Width="10" Height="10" Margin="0,0,8,0">
                             <Ellipse.Fill>
@@ -232,25 +236,20 @@
                             </Ellipse.Fill>
                         </Ellipse>
                         <TextBlock x:Name="StateLabel" Text="IDLE"
-                                   FontFamily="{StaticResource MonoFont}"
+                                   FontFamily="{StaticResource Mono}"
                                    FontSize="11" FontWeight="Bold"
-                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                   Foreground="{StaticResource TextMuted}"/>
                     </StackPanel>
 
-                    <!-- PTT button indicator (visual only) -->
+                    <!-- PTT badge -->
                     <Border Grid.Column="1" x:Name="PttIndicator"
-                            CornerRadius="6" Padding="10,4"
-                            BorderThickness="1">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="BorderBrush" Value="#334DA6FF"/>
-                            </Style>
-                        </Border.Style>
+                            CornerRadius="5" Padding="10,4"
+                            BorderThickness="1" BorderBrush="#334DA6FF"
+                            Background="Transparent">
                         <TextBlock x:Name="PttLabel" Text="PTT"
-                                   FontFamily="{StaticResource MonoFont}"
+                                   FontFamily="{StaticResource Mono}"
                                    FontSize="10" FontWeight="Bold"
-                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                   Foreground="{StaticResource TextMuted}"/>
                     </Border>
                 </Grid>
             </Border>

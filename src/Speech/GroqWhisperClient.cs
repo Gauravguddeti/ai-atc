@@ -34,58 +34,79 @@ public class GroqWhisperClient
     }
 
     /// <summary>
-    /// Transcribes WAV audio bytes. Returns null or empty string if silent/empty.
+    /// Transcribes WAV audio bytes. Tries all configured API keys before giving up.
+    /// Returns null if silent/empty or if all keys fail.
     /// </summary>
     public async Task<string?> TranscribeAsync(byte[] wavBytes, CancellationToken ct = default)
     {
         if (wavBytes == null || wavBytes.Length == 0) return null;
-
-        try
+        if (_apiKeys.Length == 0)
         {
-            using var form = new MultipartFormDataContent();
-
-            var audioContent = new ByteArrayContent(wavBytes);
-            audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
-            form.Add(audioContent, "file", "audio.wav");
-            form.Add(new StringContent(Model), "model");
-            form.Add(new StringContent("en"), "language");
-            form.Add(new StringContent("json"), "response_format");
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, EndpointUrl);
-            var keyToUse = GetNextKey();
-            if (string.IsNullOrEmpty(keyToUse))
-            {
-                _logger.LogWarning("Whisper API error: No API keys configured.");
-                return null;
-            }
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", keyToUse);
-            request.Content = form;
-
-            using var response = await _http.SendAsync(request, ct);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var errBody = await response.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Whisper API error {Status}: {Body}", response.StatusCode, errBody);
-                return null;
-            }
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            if (doc.RootElement.TryGetProperty("text", out var textEl))
-            {
-                var text = textEl.GetString()?.Trim();
-                _logger.LogInformation("Whisper transcript: {Text}", text);
-                return string.IsNullOrWhiteSpace(text) ? null : text;
-            }
-
+            _logger.LogWarning("Whisper: No API keys configured.");
             return null;
         }
-        catch (Exception ex)
+
+        // Try every key starting from _keyIndex
+        for (int attempt = 0; attempt < _apiKeys.Length; attempt++)
         {
-            _logger.LogError(ex, "Whisper transcription failed");
-            return null;
+            var idx = (_keyIndex + attempt) % _apiKeys.Length;
+            var key = _apiKeys[idx];
+
+            try
+            {
+                // Each attempt needs a fresh form (content streams can only be sent once)
+                using var form = new MultipartFormDataContent();
+                var audioContent = new ByteArrayContent(wavBytes);
+                audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+                form.Add(audioContent, "file", "audio.wav");
+                form.Add(new StringContent(Model), "model");
+                form.Add(new StringContent("en"), "language");
+                form.Add(new StringContent("json"), "response_format");
+
+                using var request = new HttpRequestMessage(HttpMethod.Post, EndpointUrl);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+                request.Content = form;
+
+                using var response = await _http.SendAsync(request, ct);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                    response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    var errBody = await response.Content.ReadAsStringAsync(ct);
+                    _logger.LogWarning("Whisper key#{K} error {Status} — trying next key. Body: {B}",
+                        idx + 1, response.StatusCode, errBody);
+                    continue; // try next key
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errBody = await response.Content.ReadAsStringAsync(ct);
+                    _logger.LogWarning("Whisper API error {Status}: {Body}", response.StatusCode, errBody);
+                    return null; // hard error, stop
+                }
+
+                // Success — advance key index for next call (round-robin)
+                _keyIndex = (idx + 1) % _apiKeys.Length;
+
+                var json = await response.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("text", out var textEl))
+                {
+                    var text = textEl.GetString()?.Trim();
+                    _logger.LogInformation("Whisper transcript: {Text}", text);
+                    return string.IsNullOrWhiteSpace(text) ? null : text;
+                }
+                return null;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Whisper transcription failed on key#{K}", idx + 1);
+                return null;
+            }
         }
+
+        _logger.LogError("Whisper: all {N} API keys failed.", _apiKeys.Length);
+        return null;
     }
 }

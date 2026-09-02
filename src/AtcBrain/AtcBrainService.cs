@@ -153,7 +153,15 @@ public class AtcBrainService
                 continue;
             }
 
-            // Hard error (bad auth, malformed request) — stop immediately
+            // Auth failure (401) — try next key rather than giving up immediately.
+            // This handles the common case where key#1 is stale/empty but key#2 is valid.
+            if (result.IsAuthFailure)
+            {
+                _logger.LogWarning("Auth failure on key#{K} — trying next key", keyIdx + 1);
+                continue;
+            }
+
+            // Other hard error (bad request, server error) — stop
             _logger.LogWarning("API error on key#{K}: {Err}", keyIdx + 1, result.ErrorMessage);
             return null;
         }
@@ -188,6 +196,12 @@ public class AtcBrainService
 
             if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 return LlmResult.RateLimit();
+
+            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                var err = await resp.Content.ReadAsStringAsync(ct);
+                return LlmResult.AuthFail($"HTTP 401: {err[..Math.Min(200, err.Length)]}");
+            }
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -242,10 +256,11 @@ public class AtcBrainService
 
     // ─── Result ───────────────────────────────────────────────────────────────
 
-    private record LlmResult(bool Success, bool IsRateLimit, string? Content, string? ErrorMessage)
+    private record LlmResult(bool Success, bool IsRateLimit, bool IsAuthFailure, string? Content, string? ErrorMessage)
     {
-        public static LlmResult Ok(string? c)    => new(true,  false, c,    null);
-        public static LlmResult RateLimit()       => new(false, true,  null, "429");
-        public static LlmResult Error(string msg) => new(false, false, null, msg);
+        public static LlmResult Ok(string? c)      => new(true,  false, false, c,    null);
+        public static LlmResult RateLimit()         => new(false, true,  false, null, "429");
+        public static LlmResult AuthFail(string m)  => new(false, false, true,  null, m);
+        public static LlmResult Error(string msg)   => new(false, false, false, null, msg);
     }
 }
