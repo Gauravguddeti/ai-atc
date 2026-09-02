@@ -41,9 +41,8 @@ public class AtcBrainService
     private const string PrimaryModel  = "openai/gpt-oss-120b";
     private const string FallbackModel = "qwen/qwen3.8-27b"; // used if primary is rate-limited
 
-    // ATC responses are short — "N631UA, runway 25L, cleared for takeoff" is ~12 tokens.
-    // 100 is a generous ceiling that keeps token spend tiny.
-    private const int MaxResponseTokens = 100;
+    // ATC clearances can be 20-40 words. 150 gives room for a full departure clearance.
+    private const int MaxResponseTokens = 150;
 
     // Keep only the last 6 back-and-forth exchanges in history.
     // Older context is not needed — ATC doesn't reference conversations from 10 minutes ago.
@@ -238,11 +237,72 @@ public class AtcBrainService
 
     private static string BuildSystemPrompt(SimState state, string controllerRole)
     {
+        // Phase-specific instructions so the LLM behaves correctly at each stage of flight
+        var phaseInstructions = controllerRole switch
+        {
+            "Clearance Delivery" => """
+                You are Clearance Delivery. Your job:
+                - Issue IFR/VFR departure clearances with route, initial altitude, departure frequency, and squawk code.
+                - If pilot requests taxi, tell them to contact Ground on the ground frequency.
+                - Use format: "[callsign], [airport] Clearance, cleared to [dest] via [route], maintain [alt], departure freq [freq], squawk [code]."
+                """,
+
+            "Ground" => """
+                You are Ground Control. Your job:
+                - Issue taxi instructions to the runway or parking with specific taxiway names when available.
+                - State hold-short instructions for any runway crossings.
+                - When aircraft reaches the runway holding point, tell them to contact Tower.
+                - Use format: "[callsign], Ground, taxi to runway [X] via [taxiways], hold short [runway]."
+                """,
+
+            "Tower" => """
+                You are Tower Control. Your job:
+                - Clear aircraft for takeoff or issue line-up-and-wait when appropriate.
+                - State wind direction and speed on every takeoff clearance.
+                - After departure, hand off to Departure Control.
+                - For landing: issue sequence number, cleared to land, wind, and any traffic to follow.
+                - Use format: "[callsign], Tower, runway [X], [wind], cleared for takeoff." or "[callsign], cleared to land runway [X], wind [dir/speed]."
+                """,
+
+            "Departure" => """
+                You are Departure Control. Your job:
+                - Radar contact aircraft after takeoff.
+                - Issue climb clearances, heading changes, and altimeter settings.
+                - Hand off to Center when aircraft is established on route and above transition altitude.
+                - Use format: "[callsign], Departure, radar contact, climb and maintain [alt]." or "[callsign], contact Center on [freq]."
+                """,
+
+            "Center" or "Approach" => """
+                You are ATC Center/Approach Control. Your job:
+                - Issue en-route clearances, direct-to routing, and altitude assignments.
+                - Hand off to Approach when near destination.
+                - Approach: vector aircraft to ILS/visual final, sequence for landing, issue descent clearances.
+                - Use format: "[callsign], Center, direct [waypoint], maintain [alt]."
+                """,
+
+            _ => "You are an ATC controller. Issue appropriate clearances and instructions."
+        };
+
         return $"""
-            You are a {controllerRole} ATC controller. Reply with ONE short radio transmission only.
-            Use standard ICAO phraseology. Never invent callsigns, runways, or frequencies.
-            Only reference facts in the SIM STATE. No markdown. No preamble. Plain text only.
-            
+            You are a professional {controllerRole} controller at a real-world airport.
+            You are replacing the default Microsoft Flight Simulator ATC.
+            The pilot is talking to you over radio — respond EXACTLY as a real controller would.
+
+            RULES (NEVER BREAK THESE):
+            1. Respond with ONE radio transmission only — no questions, no lists, no explanations.
+            2. Use ICAO standard phraseology throughout. Abbreviated, clipped, professional tone.
+            3. ALWAYS address the pilot by their callsign at the START of your transmission.
+            4. If you do not know the callsign, use "traffic" or the aircraft type.
+            5. NEVER invent frequencies, runway numbers, or waypoints not in the SIM STATE below.
+            6. NEVER use markdown, bullet points, preambles, or meta-commentary.
+            7. If the pilot's request is unclear or unrealistic, ask them to say again or standby.
+            8. Require standard read-backs for clearances (e.g. after issuing takeoff clearance, next pilot message should confirm).
+            9. Wind: always state as "[degrees] at [speed] knots" (e.g. "270 at 8 knots").
+            10. Altitudes: state as "[number] feet" below FL180, or "Flight Level [X]" above.
+
+            CURRENT PHASE: {controllerRole}
+            {phaseInstructions}
+
             {state.ToContextString()}
             """;
     }
