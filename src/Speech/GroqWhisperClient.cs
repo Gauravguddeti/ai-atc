@@ -106,9 +106,11 @@ public class GroqWhisperClient
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("text", out var textEl))
                 {
-                    var text = textEl.GetString()?.Trim();
-                    _logger.LogInformation("Whisper transcript: {Text}", text);
-                    return string.IsNullOrWhiteSpace(text) ? null : text;
+                    var raw = textEl.GetString()?.Trim();
+                    if (string.IsNullOrWhiteSpace(raw)) return null;
+                    var normalized = NormalizeTranscript(raw);
+                    _logger.LogInformation("Whisper transcript: {Text}", normalized);
+                    return normalized;
                 }
                 return null;
             }
@@ -122,5 +124,37 @@ public class GroqWhisperClient
 
         _logger.LogError("Whisper: all {N} API keys failed.", _apiKeys.Length);
         return null;
+    }
+
+    /// <summary>
+    /// Fixes common Whisper misinterpretations of ICAO phonetic words.
+    /// Whisper maps phonetic sounds to the nearest English token:
+    ///   "niner" → "9R",  "tree" → "3R",  "fower" → "4R",  "fife" → "5F"
+    /// We restore the correct ICAO phonetic word so the LLM gets clean input.
+    /// </summary>
+    private static string NormalizeTranscript(string text)
+    {
+        var s = text;
+
+        // Niner (9): Whisper outputs "9R", "9-R", "9r"
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"\b9[\s\-]?[Rr]\b", "niner");
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"\bnine[\s\-]?[Rr]\b", "niner",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // Tree (3): "3R" at end of number groups (not runway designators like "28R")
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"(?<!\d)3[\s\-]?[Rr]\b(?!\d)", "tree");
+
+        // Fower (4): "4R"
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"(?<!\d)4[\s\-]?[Rr]\b(?!\d)", "fower");
+
+        // Fife (5): "5F"
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"(?<!\d)5[\s\-]?[Ff]\b(?!\d)", "fife");
+
+        return s;
     }
 }
