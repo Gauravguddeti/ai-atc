@@ -397,10 +397,15 @@ public partial class App : Application
             "subtitles by",
             "transcribed by",
             "you",
+            "check",       // single-word Whisper artifact on short audio
+            "okay",        // Whisper hallucinates this on breath sounds
+            "hmm",
+            "uh",
+            "um",
         };
         foreach (var h in hallucinations)
-            if (t == h || t.StartsWith(h)) return true;
-        if (transcript.Trim().Length < 3) return true;
+            if (t == h || t.StartsWith(h + " ")) return true;
+        if (transcript.Trim().Length < 4) return true;
         return false;
     }
 

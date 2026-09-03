@@ -126,32 +126,32 @@ public class GroqWhisperClient
         return null;
     }
 
-    /// <summary>
-    /// Fixes common Whisper misinterpretations of ICAO phonetic words.
-    /// Whisper maps phonetic sounds to the nearest English token:
-    ///   "niner" → "9R",  "tree" → "3R",  "fower" → "4R",  "fife" → "5F"
-    /// We restore the correct ICAO phonetic word so the LLM gets clean input.
-    /// </summary>
     private static string NormalizeTranscript(string text)
     {
         var s = text;
 
-        // Niner (9): Whisper outputs "9R", "9-R", "9r"
+        // ── Niner (9) ──────────────────────────────────────────────────────────
+        // Whisper outputs "9R", "nine R", "9-R" for the ICAO word "niner".
+        // CRITICAL: must NOT use leading \b — it won't match inside "309R" because
+        // \b requires a non-word char before it, but "0" in 309 is a word char.
+        // Fix: match 9R at end of any digit group, no leading boundary required.
         s = System.Text.RegularExpressions.Regex.Replace(s,
-            @"\b9[\s\-]?[Rr]\b", "niner");
+            @"9[\s\-]?[Rr]\b", "niner");
         s = System.Text.RegularExpressions.Regex.Replace(s,
             @"\bnine[\s\-]?[Rr]\b", "niner",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        // Tree (3): "3R" at end of number groups (not runway designators like "28R")
+        // ── Tree (3) ───────────────────────────────────────────────────────────
+        // "3R" at end of number (exclude runway designators: 28R is a real runway)
+        // Only replace 3R when preceded by a non-digit OR at start of token
         s = System.Text.RegularExpressions.Regex.Replace(s,
-            @"(?<!\d)3[\s\-]?[Rr]\b(?!\d)", "tree");
+            @"(?<!\d[1-9])3[\s\-]?[Rr]\b(?!\d)", "tree");
 
-        // Fower (4): "4R"
+        // ── Fower (4) ──────────────────────────────────────────────────────────
         s = System.Text.RegularExpressions.Regex.Replace(s,
             @"(?<!\d)4[\s\-]?[Rr]\b(?!\d)", "fower");
 
-        // Fife (5): "5F"
+        // ── Fife (5) ───────────────────────────────────────────────────────────
         s = System.Text.RegularExpressions.Regex.Replace(s,
             @"(?<!\d)5[\s\-]?[Ff]\b(?!\d)", "fife");
 

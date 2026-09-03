@@ -144,11 +144,16 @@ public class AtcBrainService
 
         _history.Add(new ChatMessage("user", pilotTranscript));
         var result = await CallWithRotationAsync(simState, controllerRole, ct);
-        if (result == null)
-            _history.RemoveAt(_history.Count - 1);
 
-        // Cache simple phrase responses (avoid caching clearances that change each time)
-        if (result != null && result.Length < 80 && !result.Contains("FL") && !result.Contains("squawk"))
+        if (string.IsNullOrWhiteSpace(result))
+        {
+            // LLM returned empty — serve offline fallback so ATC is never silent
+            _history.RemoveAt(_history.Count - 1);
+            return ServeOfflineFallback(pilotTranscript);
+        }
+
+        // Cache simple phrase responses
+        if (result!.Length < 80 && !result.Contains("FL") && !result.Contains("squawk"))
             _responseCache[cacheKey] = (result, DateTime.UtcNow);
 
         return result;
@@ -184,7 +189,17 @@ public class AtcBrainService
         var words = pilotTranscript.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length >= 4)
         {
-            FlightCtx.Callsign = string.Join(" ", words.Skip(2).Take(3));
+            // words[0] = airport ("Pune"), words[1] = controller ("Ground")
+            // callsign starts at words[2], take up to 3 words
+            var cs = string.Join(" ", words.Skip(2).Take(3));
+
+            // Strip Whisper 9R artifacts from stored callsign
+            // e.g. "Air India 309R" → "Air India 309" (R was Whisper's niner artifact)
+            cs = System.Text.RegularExpressions.Regex.Replace(cs,
+                @"(\d)R\b", "$1",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            FlightCtx.Callsign = cs;
             _logger.LogInformation("Callsign detected: {C}", FlightCtx.Callsign);
         }
     }
