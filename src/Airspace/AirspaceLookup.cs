@@ -67,6 +67,18 @@ public class AirspaceLookup
             if (string.IsNullOrWhiteSpace(state.NearestAirportIcao))
                 state.NearestAirportIcao = ourAirport.Icao;
 
+            // ── Wind-based active runway ───────────────────────────────────────
+            // Select the runway whose heading is closest to wind direction (within 90°).
+            // This is how real ATC determines active runway.
+            if (ourAirport.Runways.Count > 0 && state.WindDirectionDeg > 0)
+            {
+                var activeRwy = ourAirport.Runways
+                    .OrderBy(r => HeadingDiff(r.HeadingDeg, state.WindDirectionDeg))
+                    .First();
+                state.ActiveRunway = activeRwy.Designation;
+                sb.AppendLine($"[ACTIVE RUNWAY] {activeRwy.Designation} (hdg {activeRwy.HeadingDeg}°, wind {state.WindDirectionDeg:F0}°/{state.WindSpeedKts:F0}kt)");
+            }
+
             sb.AppendLine($"[AIRPORT LAYOUT] {ourAirport.ToLayoutString()}");
 
             // Populate SimState runways from OurAirports if not already set
@@ -77,6 +89,7 @@ public class AirspaceLookup
                     .ToList();
             }
         }
+
         else if (_airportCache?.IsLoaded == true && state.NearestAirportIcao != null)
         {
             // Legacy fallback: BGL cache (empty for MSFS 2020, but kept for FSX/P3D users)
@@ -99,6 +112,13 @@ public class AirspaceLookup
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Returns the absolute angular difference between two headings (0-180°).</summary>
+    private static double HeadingDiff(double hdg1, double hdg2)
+    {
+        var diff = Math.Abs(hdg1 - hdg2) % 360;
+        return diff > 180 ? 360 - diff : diff;
     }
 
     /// <summary>

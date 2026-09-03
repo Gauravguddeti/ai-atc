@@ -135,15 +135,16 @@ public partial class OverlayWindow : Window
         Dispatcher.InvokeAsync(() =>
         {
             var connected = simState.IsConnected;
-            SimDot.Fill = connected
-                ? new SolidColorBrush(Color.FromRgb(0x66, 0xBB, 0x8E))
-                : new SolidColorBrush(Color.FromRgb(0xFF, 0x55, 0x55));
-            SimStatusText.Text = connected
-                ? $"SIM: {simState.AltitudeMslFt:F0}ft {simState.GroundSpeedKts:F0}kts"
-                : "SIM: Disconnected";
+            SimDotBrush.Color = connected
+                ? Color.FromRgb(0x4C, 0xAF, 0x82)
+                : Color.FromRgb(0xFF, 0x55, 0x55);
+            SimStatusText.Text = connected ? "SIM: Connected" : "SIM: Disconnected";
+            SimDetailText.Text = connected
+                ? $"{simState.AltitudeMslFt:F0}ft  {simState.GroundSpeedKts:F0}kts  {simState.NearestAirportIcao ?? ""}"
+                : string.Empty;
 
-            if (simState.NearestAirportIcao != null)
-                AirportLabel.Text = $"· {simState.NearestAirportIcao}";
+            if (!string.IsNullOrWhiteSpace(simState.ActiveRunway))
+                RunwayChip.Text = simState.ActiveRunway;
         });
     }
 
@@ -151,23 +152,42 @@ public partial class OverlayWindow : Window
     {
         Dispatcher.InvokeAsync(() =>
         {
-            ControllerLabel.Text = phase switch
+            PhaseChip.Text = phase switch
             {
                 ControllerPhase.ClearanceDelivery => "Clearance",
-                ControllerPhase.Ground => "Ground",
-                ControllerPhase.Tower => "Tower",
-                ControllerPhase.Departure => "Departure",
-                ControllerPhase.Center => "Center",
-                ControllerPhase.Approach => "Approach",
+                ControllerPhase.Ground            => "Ground",
+                ControllerPhase.Tower             => "Tower",
+                ControllerPhase.Departure         => "Departure",
+                ControllerPhase.Center            => "Center",
+                ControllerPhase.Approach          => "Approach",
                 _ => "ATC"
             };
-            FreqLabel.Text = freqMhz > 0 ? $"  {freqMhz:F3}" : string.Empty;
+            FreqChip.Text  = freqMhz > 0 ? $"  {freqMhz:F3}" : string.Empty;
+            FreqValue.Text = freqMhz > 0 ? $"{freqMhz:F3}" : "---.-";
         });
     }
 
     public void SetPttKeyHint(string keyName)
     {
-        Dispatcher.InvokeAsync(() => PttKeyHint.Text = $"[{keyName}]");
+        Dispatcher.InvokeAsync(() => PttLabel.Text = $"{keyName.ToUpper()}  PTT");
+    }
+
+    public void SetCallsign(string callsign)
+    {
+        Dispatcher.InvokeAsync(() =>
+            CallsignChip.Text = string.IsNullOrWhiteSpace(callsign) ? "------" : callsign);
+    }
+
+    public void SetSquawk(string squawk)
+    {
+        Dispatcher.InvokeAsync(() =>
+            SquawkChip.Text = string.IsNullOrWhiteSpace(squawk) ? "----" : squawk);
+    }
+
+    public void SetActiveRunway(string runway)
+    {
+        Dispatcher.InvokeAsync(() =>
+            RunwayChip.Text = string.IsNullOrWhiteSpace(runway) ? "---" : runway);
     }
 
     public void AddPilotMessage(string text)
@@ -203,18 +223,9 @@ public partial class OverlayWindow : Window
 
     public void AddSystemMessage(string text)
     {
-        Dispatcher.InvokeAsync(() =>
-        {
-            _chatEntries.Add(new ChatEntry
-            {
-                Prefix      = "·",
-                Text        = text,
-                IsSystem    = true,
-                PrefixColor = _systemBrush,
-                TextColor   = _systemBrush
-            });
-            TrimAndScroll();
-        });
+        // System messages are NOT shown in the chat (keeps UI clean like BeyondATC).
+        // They are written to the log file only by the caller via ILogger.
+        // If a visible toast is ever needed, add it to the footer label here.
     }
 
     private void TrimAndScroll()

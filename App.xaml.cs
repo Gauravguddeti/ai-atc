@@ -324,6 +324,11 @@ public partial class App : Application
 
             _overlay.AddPilotMessage(transcript);
 
+            // Try to detect callsign from first transmission
+            _atcBrain.TryExtractCallsign(transcript);
+            if (_atcBrain.FlightCtx.HasCallsign)
+                _overlay.SetCallsign(_atcBrain.FlightCtx.Callsign);
+
             // Step 2: LLM
             var simState = _simBridge.CurrentState;
             var role = _handoff.ControllerRoleLabel;
@@ -388,16 +393,18 @@ public partial class App : Application
         _voicePipeline.SetSpeaking();
         try
         {
-            var wavBytes = await _piperTts.SynthesizeAsync(text, ct);
+            // Pre-process ATC text to ICAO phonetics before TTS
+            // e.g. "309" → "tree zero niner", "FL280" → "flight level two eight zero"
+            var ttsText = ToAviationSpeech(text);
+            var wavBytes = await _piperTts.SynthesizeAsync(ttsText, ct);
             if (wavBytes != null)
             {
                 await _audioPlayer.PlayWithRadioFilterAsync(wavBytes, ct);
             }
             else
             {
-                // Piper binary or model not found at expected path — silent fallback
-                _loggerFactory.CreateLogger<App>().LogWarning("TTS skipped — Piper not available at configured path");
-                await Task.Delay(800, ct); // brief pause to simulate speaking time
+                _loggerFactory.CreateLogger<App>().LogWarning("TTS skipped — Piper not available");
+                await Task.Delay(800, ct);
             }
         }
         finally
@@ -406,18 +413,69 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// Converts ATC LLM output to Piper-friendly ICAO phonetic speech.
+    /// - Flight levels: "FL280" → "flight level two eight zero"
+    /// - Squawk: "1200" → "one two zero zero"
+    /// - General digit sequences: "309" → "tree zero niner"
+    /// - Frequencies: "121.905" preserved as-is (Piper handles decimals fine)
+    /// </summary>
+    private static string ToAviationSpeech(string text)
+    {
+        var s = text;
+
+        // Flight Level: "FL280" or "FL 280"
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"\bFL\s?(\d{2,3})\b",
+            m => "flight level " + DigitsToPhonetic(m.Groups[1].Value),
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // Squawk code (exactly 4 digits after "squawk")
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"(?i)\bsquawk\s+(\d{4})\b",
+            m => "squawk " + DigitsToPhonetic(m.Groups[1].Value));
+
+        // Callsign numbers (2-4 digits not part of a frequency like 121.9)
+        // Only convert isolated digit groups: e.g. "302" in "Air India 302"
+        s = System.Text.RegularExpressions.Regex.Replace(s,
+            @"(?<![.\d])(\d{2,4})(?![.\d])",
+            m => DigitsToPhonetic(m.Groups[1].Value));
+
+        return s;
+    }
+
+    private static string DigitsToPhonetic(string digits)
+    {
+        var phonetics = new Dictionary<char, string>
+        {
+            ['0'] = "zero",
+            ['1'] = "one",
+            ['2'] = "two",
+            ['3'] = "tree",
+            ['4'] = "fower",
+            ['5'] = "fife",
+            ['6'] = "six",
+            ['7'] = "seven",
+            ['8'] = "eight",
+            ['9'] = "niner",
+        };
+        return string.Join(" ", digits.Select(c => phonetics.TryGetValue(c, out var p) ? p : c.ToString()));
+    }
+
     private void OnPhaseChanged(ControllerPhase from, ControllerPhase to)
     {
         var state = _simBridge.CurrentState;
         double freq = to switch
         {
-            ControllerPhase.Ground => state.GroundFreqMhz,
-            ControllerPhase.Tower => state.TowerFreqMhz,
+            ControllerPhase.Ground           => state.GroundFreqMhz,
+            ControllerPhase.Tower            => state.TowerFreqMhz,
             ControllerPhase.ClearanceDelivery => state.GroundFreqMhz,
             _ => 0
         };
         _overlay.UpdateControllerPhase(to, freq);
-        _overlay.AddSystemMessage($"Controller: {from} → {to}");
+        // Clear history but inject handoff summary (no chat message — UI is clean)
+        var fromLabel = _handoff.ControllerRoleLabel;
+        _atcBrain.ClearHistoryForPhaseChange(from.ToString(), to.ToString());
     }
 
     private async Task OnTriggerFired(string triggerLabel)

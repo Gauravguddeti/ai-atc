@@ -2,9 +2,9 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:MsfsAiAtc.Overlay"
-        Title="MSFS AI ATC"
-        Width="520" Height="420"
-        MinWidth="380" MinHeight="260"
+        Title="AI ATC"
+        Width="560" Height="460"
+        MinWidth="420" MinHeight="300"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -14,93 +14,130 @@
         Left="20" Top="20">
 
     <Window.Resources>
-        <!-- Core palette (SayIntentions-inspired dark theme) -->
-        <SolidColorBrush x:Key="WinBg"         Color="#E6141820"/>
-        <SolidColorBrush x:Key="HeaderBg"      Color="#FF0F1117"/>
-        <SolidColorBrush x:Key="InfoBg"        Color="#FF181C26"/>
-        <SolidColorBrush x:Key="ChatBg"        Color="#FF111318"/>
-        <SolidColorBrush x:Key="FooterBg"      Color="#FF0F1117"/>
-        <SolidColorBrush x:Key="PilotBubble"   Color="#FF5B4FCF"/>   <!-- purple like SayIntentions pilot -->
-        <SolidColorBrush x:Key="AtcBubble"     Color="#FF1B3A2E"/>   <!-- dark green for ATC -->
-        <SolidColorBrush x:Key="SysFg"         Color="#FF6677AA"/>
-        <SolidColorBrush x:Key="PilotFg"       Color="#FFFFFFFF"/>
-        <SolidColorBrush x:Key="AtcFg"         Color="#FFD4F0E0"/>
-        <SolidColorBrush x:Key="AccentGreen"   Color="#FF4CAF82"/>
-        <SolidColorBrush x:Key="AccentPurple"  Color="#FF7C6FF7"/>
-        <SolidColorBrush x:Key="AccentAmber"   Color="#FFFFCD8A"/>
-        <SolidColorBrush x:Key="AccentRed"     Color="#FFFF5555"/>
-        <SolidColorBrush x:Key="TextMuted"     Color="#FF8899BB"/>
-        <SolidColorBrush x:Key="TextPrimary"   Color="#FFE8EAF6"/>
+        <!-- Core palette — BeyondATC-inspired dark blue/slate -->
+        <SolidColorBrush x:Key="WinBg"        Color="#F0111520"/>
+        <SolidColorBrush x:Key="HeaderBg"     Color="#FF0C1018"/>
+        <SolidColorBrush x:Key="ChatBg"       Color="#FF0F141C"/>
+        <SolidColorBrush x:Key="InfoBg"       Color="#FF0A0E15"/>
+        <SolidColorBrush x:Key="FooterBg"     Color="#FF080C12"/>
+        <SolidColorBrush x:Key="PilotBubble"  Color="#FF1E2A4A"/>
+        <SolidColorBrush x:Key="AtcBubble"    Color="#FF152A1E"/>
+        <SolidColorBrush x:Key="PilotFg"      Color="#FFCCD6FF"/>
+        <SolidColorBrush x:Key="AtcFg"        Color="#FFCCEEDD"/>
+        <SolidColorBrush x:Key="PilotPrefix"  Color="#FF5B7CFF"/>
+        <SolidColorBrush x:Key="AtcPrefix"    Color="#FF4CAF82"/>
+        <SolidColorBrush x:Key="MutedFg"      Color="#FF4A5568"/>
+        <SolidColorBrush x:Key="SubtleFg"     Color="#FF718096"/>
+        <SolidColorBrush x:Key="AccentBlue"   Color="#FF5B7CFF"/>
+        <SolidColorBrush x:Key="AccentGreen"  Color="#FF4CAF82"/>
+        <SolidColorBrush x:Key="AccentAmber"  Color="#FFFFCD8A"/>
+        <SolidColorBrush x:Key="AccentRed"    Color="#FFFF5555"/>
+        <SolidColorBrush x:Key="ChipBg"       Color="#FF1A2035"/>
+        <SolidColorBrush x:Key="ChipBorder"   Color="#FF2A3560"/>
         <FontFamily x:Key="Ui">Segoe UI, Arial</FontFamily>
         <FontFamily x:Key="Mono">Cascadia Code, Consolas, Courier New</FontFamily>
 
-        <!-- Frequency chip style -->
-        <Style x:Key="FreqChip" TargetType="Border">
-            <Setter Property="CornerRadius"    Value="4"/>
-            <Setter Property="Padding"         Value="8,3"/>
-            <Setter Property="Margin"          Value="4,0,0,0"/>
-            <Setter Property="Background"      Value="#FF1E2230"/>
+        <!-- Info chip style (used in the bottom bar) -->
+        <Style x:Key="InfoChip" TargetType="Border">
+            <Setter Property="Background"     Value="{StaticResource ChipBg}"/>
+            <Setter Property="BorderBrush"    Value="{StaticResource ChipBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius"   Value="6"/>
+            <Setter Property="Padding"        Value="12,6"/>
+            <Setter Property="Margin"         Value="4,0"/>
+        </Style>
+
+        <!-- Label above chip value -->
+        <Style x:Key="ChipLabel" TargetType="TextBlock">
+            <Setter Property="FontFamily"   Value="{StaticResource Ui}"/>
+            <Setter Property="FontSize"     Value="8"/>
+            <Setter Property="FontWeight"   Value="SemiBold"/>
+            <Setter Property="Foreground"   Value="{StaticResource SubtleFg}"/>
+            <Setter Property="Margin"       Value="0,0,0,1"/>
+        </Style>
+
+        <!-- Value inside chip -->
+        <Style x:Key="ChipValue" TargetType="TextBlock">
+            <Setter Property="FontFamily"   Value="{StaticResource Mono}"/>
+            <Setter Property="FontSize"     Value="15"/>
+            <Setter Property="FontWeight"   Value="Bold"/>
+            <Setter Property="Foreground"   Value="{StaticResource AccentBlue}"/>
         </Style>
     </Window.Resources>
 
     <!-- Root glass border -->
-    <Border CornerRadius="10"
+    <Border CornerRadius="12"
             Background="{StaticResource WinBg}"
-            BorderBrush="#44FFFFFF"
+            BorderBrush="#22AABBFF"
             BorderThickness="1">
         <Border.Effect>
-            <DropShadowEffect Color="#000" BlurRadius="28" ShadowDepth="0" Opacity="0.75"/>
+            <DropShadowEffect Color="#000" BlurRadius="40" ShadowDepth="0" Opacity="0.85"/>
         </Border.Effect>
 
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>  <!-- drag / title bar -->
-                <RowDefinition Height="Auto"/>  <!-- COM freq chips -->
-                <RowDefinition Height="Auto"/>  <!-- airport info -->
-                <RowDefinition Height="*"/>     <!-- chat log -->
-                <RowDefinition Height="Auto"/>  <!-- PTT footer -->
+                <RowDefinition Height="Auto"/>  <!-- title bar -->
+                <RowDefinition Height="*"/>     <!-- chat ONLY -->
+                <RowDefinition Height="Auto"/>  <!-- BeyondATC-style info chips -->
+                <RowDefinition Height="Auto"/>  <!-- status footer -->
             </Grid.RowDefinitions>
 
-            <!-- ═══ DRAG / TITLE BAR ═══════════════════════════════════════════ -->
+            <!-- ═══ TITLE BAR ═══════════════════════════════════════════════════ -->
             <Border Grid.Row="0"
                     Background="{StaticResource HeaderBg}"
-                    CornerRadius="10,10,0,0"
+                    CornerRadius="12,12,0,0"
                     MouseDown="TitleBar_MouseDown"
                     Cursor="SizeAll"
-                    Padding="12,8">
+                    Padding="14,9">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- Headset icon + brand -->
+                    <!-- Brand -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="🎧" FontSize="15" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="✈" FontSize="14" VerticalAlignment="Center" Margin="0,0,7,0"
+                                   Foreground="{StaticResource AccentBlue}"/>
                         <TextBlock Text="AI" FontFamily="{StaticResource Ui}" FontSize="13" FontWeight="Bold"
-                                   Foreground="{StaticResource AccentPurple}" VerticalAlignment="Center"/>
+                                   Foreground="{StaticResource AccentBlue}" VerticalAlignment="Center"/>
                         <TextBlock Text=" ATC" FontFamily="{StaticResource Ui}" FontSize="13" FontWeight="Bold"
-                                   Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                   Foreground="White" VerticalAlignment="Center"/>
                     </StackPanel>
 
-                    <!-- SimConnect dot + status -->
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Ellipse x:Name="SimDot" Width="8" Height="8" Margin="0,0,6,0"
-                                 Fill="{StaticResource AccentRed}"/>
+                    <!-- Phase chip (centre) -->
+                    <Border Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Background="#FF1A2240" CornerRadius="4" Padding="10,3">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="PhaseChip" Text="Ground"
+                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBlue}"/>
+                            <TextBlock x:Name="FreqChip" Text=""
+                                       FontFamily="{StaticResource Mono}" FontSize="11"
+                                       Foreground="{StaticResource AccentGreen}" Margin="6,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Sim status dot -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                        <Ellipse x:Name="SimDot" Width="7" Height="7" Margin="0,0,5,0">
+                            <Ellipse.Fill><SolidColorBrush x:Name="SimDotBrush" Color="#FFFF5555"/></Ellipse.Fill>
+                        </Ellipse>
                         <TextBlock x:Name="SimStatusText" Text="SIM: Disconnected"
-                                   FontFamily="{StaticResource Ui}" FontSize="10"
-                                   Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
+                                   FontFamily="{StaticResource Ui}" FontSize="9"
+                                   Foreground="{StaticResource SubtleFg}" VerticalAlignment="Center"/>
                     </StackPanel>
 
-                    <!-- Close button -->
-                    <Button Grid.Column="2" x:Name="CloseBtn" Content="✕"
-                            FontSize="12" Cursor="Hand"
-                            Foreground="{StaticResource TextMuted}"
-                            Click="CloseBtn_Click" Padding="6,0">
+                    <!-- Close -->
+                    <Button Grid.Column="3" x:Name="CloseBtn" Content="✕"
+                            FontSize="11" Cursor="Hand"
+                            Foreground="{StaticResource MutedFg}"
+                            Click="CloseBtn_Click" Padding="6,2">
                         <Button.Style>
                             <Style TargetType="Button">
-                                <Setter Property="Background"   Value="Transparent"/>
+                                <Setter Property="Background"    Value="Transparent"/>
                                 <Setter Property="BorderThickness" Value="0"/>
                                 <Setter Property="Template">
                                     <Setter.Value>
@@ -112,7 +149,7 @@
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
                                                     <Setter Property="Background" Value="#33FF5555"/>
-                                                    <Setter Property="Foreground" Value="#FF5555"/>
+                                                    <Setter Property="Foreground" Value="#FFFF5555"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -124,49 +161,8 @@
                 </Grid>
             </Border>
 
-            <!-- ═══ COM FREQUENCY CHIPS ══════════════════════════════════════════ -->
-            <Border Grid.Row="1" Background="{StaticResource HeaderBg}"
-                    Padding="10,5" BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <!-- Active freq chip -->
-                    <Border Style="{StaticResource FreqChip}" Background="#FF2D3250">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="ControllerLabel" Text="Ground"
-                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
-                                       Foreground="{StaticResource AccentPurple}" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="FreqLabel" Text=""
-                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
-                                       Foreground="{StaticResource AccentGreen}"
-                                       Margin="6,0,0,0" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Airport chip -->
-                    <Border Style="{StaticResource FreqChip}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="OPDB " FontSize="9" Foreground="{StaticResource TextMuted}"
-                                       FontFamily="{StaticResource Ui}" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="AirportLabel" Text="---"
-                                       FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="SemiBold"
-                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- PTT key hint -->
-                    <Border Style="{StaticResource FreqChip}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="PTT " FontSize="9" Foreground="{StaticResource TextMuted}"
-                                       FontFamily="{StaticResource Ui}" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="PttKeyHint" Text="[CAPS]"
-                                       FontFamily="{StaticResource Mono}" FontSize="10" FontWeight="Bold"
-                                       Foreground="{StaticResource AccentAmber}" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-            </Border>
-
-            <!-- ═══ CHAT LOG ══════════════════════════════════════════════════════ -->
-            <Border Grid.Row="3" Background="{StaticResource ChatBg}" Padding="8,6">
+            <!-- ═══ CHAT — full height, ONLY pilot+ATC bubbles ════════════════ -->
+            <Border Grid.Row="1" Background="{StaticResource ChatBg}" Padding="10,8">
                 <ScrollViewer x:Name="ChatScroll"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
@@ -174,39 +170,36 @@
                     <ItemsControl x:Name="ChatLog">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type local:ChatEntry}">
-                                <!-- Each row is a full-width Grid so bubbles can align left or right -->
-                                <Grid Margin="0,3">
-                                    <Border x:Name="BubbleBorder"
-                                            Padding="10,7" CornerRadius="8"
-                                            MaxWidth="370" HorizontalAlignment="Left">
+                                <Grid Margin="0,4">
+                                    <Border Padding="12,8" CornerRadius="10"
+                                            MaxWidth="420">
                                         <Border.Style>
                                             <Style TargetType="Border">
-                                                <Setter Property="Background" Value="{StaticResource AtcBubble}"/>
+                                                <Setter Property="Background"          Value="{StaticResource AtcBubble}"/>
                                                 <Setter Property="HorizontalAlignment" Value="Left"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsPilot}" Value="True">
-                                                        <Setter Property="Background" Value="{StaticResource PilotBubble}"/>
+                                                        <Setter Property="Background"          Value="{StaticResource PilotBubble}"/>
                                                         <Setter Property="HorizontalAlignment" Value="Right"/>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding IsSystem}" Value="True">
-                                                        <Setter Property="Background" Value="Transparent"/>
-                                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
                                         <StackPanel>
+                                            <!-- Role label: "YOU" or "GROUND" etc -->
                                             <TextBlock Text="{Binding Prefix}"
                                                        FontFamily="{StaticResource Ui}"
-                                                       FontSize="9" FontWeight="Bold"
+                                                       FontSize="8" FontWeight="Bold"
                                                        Foreground="{Binding PrefixColor}"
-                                                       Margin="0,0,0,2"
+                                                       Margin="0,0,0,3"
                                                        Visibility="{Binding PrefixVisibility}"/>
+                                            <!-- Message text -->
                                             <TextBlock Text="{Binding Text}"
                                                        FontFamily="{StaticResource Ui}"
-                                                       FontSize="12"
+                                                       FontSize="12.5"
                                                        Foreground="{Binding TextColor}"
-                                                       TextWrapping="Wrap"/>
+                                                       TextWrapping="Wrap"
+                                                       LineHeight="18"/>
                                         </StackPanel>
                                     </Border>
                                 </Grid>
@@ -216,40 +209,105 @@
                 </ScrollViewer>
             </Border>
 
-            <!-- ═══ PTT FOOTER ═══════════════════════════════════════════════════ -->
-            <Border Grid.Row="4"
-                    Background="{StaticResource FooterBg}"
-                    CornerRadius="0,0,10,10"
-                    Padding="10,7"
-                    BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0">
+            <!-- ═══ INFO BAR — BeyondATC style chips ══════════════════════════ -->
+            <Border Grid.Row="2"
+                    Background="{StaticResource InfoBg}"
+                    BorderBrush="#18AABBFF" BorderThickness="0,1,0,1"
+                    Padding="8,10">
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Runway chip -->
+                    <Border Grid.Column="0" Style="{StaticResource InfoChip}">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="ACTIVE RWY" Style="{StaticResource ChipLabel}"
+                                       HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="RunwayChip" Text="---"
+                                       Style="{StaticResource ChipValue}"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Squawk chip -->
+                    <Border Grid.Column="1" Style="{StaticResource InfoChip}">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="SQUAWK" Style="{StaticResource ChipLabel}"
+                                       HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="SquawkChip" Text="----"
+                                       Style="{StaticResource ChipValue}"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Frequency chip -->
+                    <Border Grid.Column="2" Style="{StaticResource InfoChip}">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="FREQUENCY" Style="{StaticResource ChipLabel}"
+                                       HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="FreqValue" Text="---.-"
+                                       Style="{StaticResource ChipValue}"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Callsign chip -->
+                    <Border Grid.Column="3" Style="{StaticResource InfoChip}">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="CALLSIGN" Style="{StaticResource ChipLabel}"
+                                       HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="CallsignChip" Text="------"
+                                       Style="{StaticResource ChipValue}"
+                                       FontSize="11"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- ═══ STATUS FOOTER ══════════════════════════════════════════════ -->
+            <Border Grid.Row="3"
+                    Background="{StaticResource FooterBg}"
+                    CornerRadius="0,0,12,12"
+                    Padding="12,7"
+                    BorderBrush="#15AABBFF" BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- State indicator -->
+                    <!-- Voice state dot + label -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Ellipse x:Name="StateDot" Width="10" Height="10" Margin="0,0,8,0">
-                            <Ellipse.Fill>
-                                <SolidColorBrush x:Name="StateDotBrush" Color="#334DA6FF"/>
-                            </Ellipse.Fill>
+                        <Ellipse x:Name="StateDot" Width="8" Height="8" Margin="0,0,7,0">
+                            <Ellipse.Fill><SolidColorBrush x:Name="StateDotBrush" Color="#33334DA6"/></Ellipse.Fill>
                         </Ellipse>
                         <TextBlock x:Name="StateLabel" Text="IDLE"
                                    FontFamily="{StaticResource Mono}"
-                                   FontSize="11" FontWeight="Bold"
-                                   Foreground="{StaticResource TextMuted}"/>
+                                   FontSize="10" FontWeight="Bold"
+                                   Foreground="{StaticResource MutedFg}"/>
                     </StackPanel>
 
-                    <!-- PTT badge -->
-                    <Border Grid.Column="1" x:Name="PttIndicator"
-                            CornerRadius="5" Padding="10,4"
-                            BorderThickness="1" BorderBrush="#334DA6FF"
+                    <!-- SIM altitude/speed when connected -->
+                    <TextBlock Grid.Column="1" x:Name="SimDetailText" Text=""
+                               FontFamily="{StaticResource Mono}" FontSize="9"
+                               Foreground="{StaticResource MutedFg}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                    <!-- PTT key hint -->
+                    <Border Grid.Column="2" x:Name="PttIndicator"
+                            CornerRadius="4" Padding="10,3"
+                            BorderThickness="1" BorderBrush="#22334DA6"
                             Background="Transparent">
-                        <TextBlock x:Name="PttLabel" Text="PTT"
+                        <TextBlock x:Name="PttLabel" Text="CAPS  PTT"
                                    FontFamily="{StaticResource Mono}"
-                                   FontSize="10" FontWeight="Bold"
-                                   Foreground="{StaticResource TextMuted}"/>
+                                   FontSize="9" FontWeight="Bold"
+                                   Foreground="{StaticResource MutedFg}"/>
                     </Border>
                 </Grid>
             </Border>

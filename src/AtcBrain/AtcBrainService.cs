@@ -10,6 +10,34 @@ namespace MsfsAiAtc.AtcBrain;
 public record ChatMessage(string Role, string Content);
 
 /// <summary>
+/// Persists flight-level state across phase changes.
+/// The LLM gets this injected in every system prompt so it never forgets callsign/squawk.
+/// </summary>
+public class FlightContext
+{
+    public string Callsign     { get; set; } = string.Empty;  // e.g. "Air India 302"
+    public string SquawkCode   { get; set; } = string.Empty;  // e.g. "5245"
+    public string ActiveRunway { get; set; } = string.Empty;  // e.g. "27L"
+    public string AssignedSid  { get; set; } = string.Empty;  // e.g. "DEGE 1X"
+    public string DepartureIcao{ get; set; } = string.Empty;
+    public string ArrivalIcao  { get; set; } = string.Empty;
+
+    public bool HasCallsign => !string.IsNullOrWhiteSpace(Callsign);
+
+    public string ToPromptLine()
+    {
+        var parts = new List<string>();
+        if (HasCallsign)                        parts.Add($"Callsign: {Callsign}");
+        if (!string.IsNullOrWhiteSpace(SquawkCode))   parts.Add($"Squawk: {SquawkCode}");
+        if (!string.IsNullOrWhiteSpace(ActiveRunway))  parts.Add($"Active runway: {ActiveRunway}");
+        if (!string.IsNullOrWhiteSpace(AssignedSid))   parts.Add($"SID: {AssignedSid}");
+        if (!string.IsNullOrWhiteSpace(DepartureIcao)) parts.Add($"Dep: {DepartureIcao}");
+        if (!string.IsNullOrWhiteSpace(ArrivalIcao))   parts.Add($"Arr: {ArrivalIcao}");
+        return parts.Count > 0 ? "[FLIGHT] " + string.Join(" | ", parts) : string.Empty;
+    }
+}
+
+/// <summary>
 /// Core ATC brain — calls Groq LLM to produce ATC phraseology from live SimState.
 ///
 /// ── Models (verified live from /v1/models endpoint, August 2026) ──────────────
@@ -41,14 +69,17 @@ public class AtcBrainService
     private const string PrimaryModel  = "openai/gpt-oss-120b";
     private const string FallbackModel = "qwen/qwen3.8-27b"; // used if primary is rate-limited
 
-    // ATC clearances can be 20-40 words. 150 gives room for a full departure clearance.
-    private const int MaxResponseTokens = 150;
+    // ATC clearances can be 20-40 words. 200 gives room for a full departure clearance.
+    private const int MaxResponseTokens = 200;
 
-    // Keep only the last 6 back-and-forth exchanges in history.
-    // Older context is not needed — ATC doesn't reference conversations from 10 minutes ago.
-    private const int MaxHistoryTurns = 6;
+    // Keep last 8 back-and-forth exchanges per phase (clears on phase change).
+    private const int MaxHistoryTurns = 8;
 
     private readonly List<ChatMessage> _history = new();
+    private string _phaseHandoffSummary = string.Empty; // injected after phase change
+
+    // Persistent flight context — survives phase changes
+    public FlightContext FlightCtx { get; } = new();
 
     // Key rotation state
     private int _activeKeyIndex = 0;
@@ -93,6 +124,41 @@ public class AtcBrainService
     }
 
     public void ClearHistory() => _history.Clear();
+
+    /// <summary>
+    /// Called by HandoffStateMachine on phase change.
+    /// Clears conversation history but injects a one-line summary so the new
+    /// controller knows who just handed off and why.
+    /// </summary>
+    public void ClearHistoryForPhaseChange(string fromPhase, string toPhase)
+    {
+        _phaseHandoffSummary =
+            $"[HANDOFF] Aircraft transferred from {fromPhase} to {toPhase}. " +
+            (FlightCtx.HasCallsign ? $"Callsign: {FlightCtx.Callsign}. " : string.Empty) +
+            (string.IsNullOrWhiteSpace(FlightCtx.ActiveRunway) ? string.Empty
+                : $"Using runway {FlightCtx.ActiveRunway}. ");
+        _history.Clear();
+        _logger.LogInformation("History cleared for phase change {F} → {T}", fromPhase, toPhase);
+    }
+
+    /// <summary>
+    /// Try to extract callsign from pilot's first transmission if not already known.
+    /// Injects into FlightCtx so subsequent transmissions always include it.
+    /// </summary>
+    public void TryExtractCallsign(string pilotTranscript)
+    {
+        if (FlightCtx.HasCallsign) return;
+        // Heuristic: take the first 5 words as the probable callsign
+        // e.g. "Pune Ground Air India 302 radio check" → "Air India 302"
+        var words = pilotTranscript.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // Skip leading "[Airport] [Controller]" words (typically first 2)
+        if (words.Length >= 4)
+        {
+            // words[0] = airport, words[1] = controller → callsign starts at words[2]
+            FlightCtx.Callsign = string.Join(" ", words.Skip(2).Take(3));
+            _logger.LogInformation("Callsign detected: {C}", FlightCtx.Callsign);
+        }
+    }
 
     // ─── Key + model rotation ─────────────────────────────────────────────────
 
@@ -230,12 +296,21 @@ public class AtcBrainService
         {
             new("system", BuildSystemPrompt(simState, controllerRole))
         };
+
+        // After a phase change, inject a one-line handoff summary before regular history
+        if (!string.IsNullOrWhiteSpace(_phaseHandoffSummary))
+        {
+            messages.Add(new("user",      _phaseHandoffSummary));
+            messages.Add(new("assistant", "Understood, continuing service."));
+            _phaseHandoffSummary = string.Empty; // only inject once
+        }
+
         int start = Math.Max(0, _history.Count - MaxHistoryTurns * 2);
         messages.AddRange(_history.Skip(start));
         return messages;
     }
 
-    private static string BuildSystemPrompt(SimState state, string controllerRole)
+    private string BuildSystemPrompt(SimState state, string controllerRole)
     {
         // Phase-specific instructions so the LLM behaves correctly at each stage of flight
         var phaseInstructions = controllerRole switch
@@ -290,19 +365,20 @@ public class AtcBrainService
 
             RULES (NEVER BREAK THESE):
             1. Respond with ONE radio transmission only — no questions, no lists, no explanations.
-            2. Use ICAO standard phraseology throughout. Abbreviated, clipped, professional tone.
+            2. Use ICAO standard phraseology. Abbreviated, clipped, professional tone.
             3. ALWAYS address the pilot by their callsign at the START of your transmission.
-            4. If you do not know the callsign, use "traffic" or the aircraft type.
-            5. NEVER invent frequencies, runway numbers, or waypoints not in the SIM STATE below.
-            6. NEVER use markdown, bullet points, preambles, or meta-commentary.
-            7. If the pilot's request is unclear or unrealistic, ask them to say again or standby.
-            8. Require standard read-backs for clearances (e.g. after issuing takeoff clearance, next pilot message should confirm).
-            9. Wind: always state as "[degrees] at [speed] knots" (e.g. "270 at 8 knots").
-            10. Altitudes: state as "[number] feet" below FL180, or "Flight Level [X]" above.
+            4. If you do not know the callsign, use the aircraft type or "traffic".
+            5. NEVER invent frequencies or waypoints not mentioned in the SIM STATE.
+            6. NEVER use markdown, bullet points, or meta-commentary.
+            7. If pilot's request is unclear, say "say again" or "stand by".
+            8. Wind: always state as "[degrees] at [speed] knots".
+            9. Altitudes below FL180: "[N] feet". Above: "Flight Level [XYZ]".
+            10. If no SimConnect data: respond to basic radio checks and startup requests normally.
 
             CURRENT PHASE: {controllerRole}
             {phaseInstructions}
 
+            {FlightCtx.ToPromptLine()}
             {state.ToContextString()}
             """;
     }
