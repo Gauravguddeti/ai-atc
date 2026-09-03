@@ -14,26 +14,26 @@
         Left="20" Top="20">
 
     <Window.Resources>
-        <!-- Core palette — BeyondATC-inspired dark blue/slate -->
-        <SolidColorBrush x:Key="WinBg"        Color="#F0111520"/>
-        <SolidColorBrush x:Key="HeaderBg"     Color="#FF0C1018"/>
-        <SolidColorBrush x:Key="ChatBg"       Color="#FF0F141C"/>
-        <SolidColorBrush x:Key="InfoBg"       Color="#FF0A0E15"/>
-        <SolidColorBrush x:Key="FooterBg"     Color="#FF080C12"/>
-        <SolidColorBrush x:Key="PilotBubble"  Color="#FF1E2A4A"/>
-        <SolidColorBrush x:Key="AtcBubble"    Color="#FF152A1E"/>
-        <SolidColorBrush x:Key="PilotFg"      Color="#FFCCD6FF"/>
-        <SolidColorBrush x:Key="AtcFg"        Color="#FFCCEEDD"/>
-        <SolidColorBrush x:Key="PilotPrefix"  Color="#FF5B7CFF"/>
-        <SolidColorBrush x:Key="AtcPrefix"    Color="#FF4CAF82"/>
-        <SolidColorBrush x:Key="MutedFg"      Color="#FF4A5568"/>
-        <SolidColorBrush x:Key="SubtleFg"     Color="#FF718096"/>
-        <SolidColorBrush x:Key="AccentBlue"   Color="#FF5B7CFF"/>
-        <SolidColorBrush x:Key="AccentGreen"  Color="#FF4CAF82"/>
-        <SolidColorBrush x:Key="AccentAmber"  Color="#FFFFCD8A"/>
-        <SolidColorBrush x:Key="AccentRed"    Color="#FFFF5555"/>
-        <SolidColorBrush x:Key="ChipBg"       Color="#FF1A2035"/>
-        <SolidColorBrush x:Key="ChipBorder"   Color="#FF2A3560"/>
+        <!-- Minimalist opaque palette — radar/military aesthetic, no gradients, no transparency -->
+        <SolidColorBrush x:Key="WinBg"        Color="#FF0C1014"/>  <!-- near-black slate, fully opaque -->
+        <SolidColorBrush x:Key="HeaderBg"     Color="#FF090C10"/>  <!-- darkest row -->
+        <SolidColorBrush x:Key="ChatBg"       Color="#FF0E1218"/>  <!-- chat area, 1 shade up -->
+        <SolidColorBrush x:Key="InfoBg"       Color="#FF090C10"/>  <!-- info bar matches header -->
+        <SolidColorBrush x:Key="FooterBg"     Color="#FF070A0E"/>  <!-- footer, darkest -->
+        <SolidColorBrush x:Key="PilotBubble"  Color="#FF131D2E"/>  <!-- solid dark navy for pilot -->
+        <SolidColorBrush x:Key="AtcBubble"    Color="#FF0E1C14"/>  <!-- solid dark green for ATC -->
+        <SolidColorBrush x:Key="PilotFg"      Color="#FFD0DCFF"/>  <!-- pilot text: cool white-blue -->
+        <SolidColorBrush x:Key="AtcFg"        Color="#FFCCE8D8"/>  <!-- ATC text: cool white-green -->
+        <SolidColorBrush x:Key="PilotPrefix"  Color="#FF4A80FF"/>  <!-- pilot label: electric blue -->
+        <SolidColorBrush x:Key="AtcPrefix"    Color="#FF3DBF7A"/>  <!-- ATC label: solid green -->
+        <SolidColorBrush x:Key="MutedFg"      Color="#FF3A4455"/>  <!-- inactive elements -->
+        <SolidColorBrush x:Key="SubtleFg"     Color="#FF556070"/>  <!-- secondary labels -->
+        <SolidColorBrush x:Key="AccentBlue"   Color="#FF4A80FF"/>  <!-- pilot accent -->
+        <SolidColorBrush x:Key="AccentGreen"  Color="#FF3DBF7A"/>  <!-- ATC / connected accent -->
+        <SolidColorBrush x:Key="AccentAmber"  Color="#FFFF9500"/>  <!-- warning / recording -->
+        <SolidColorBrush x:Key="AccentRed"    Color="#FFFF4444"/>  <!-- error / disconnected -->
+        <SolidColorBrush x:Key="ChipBg"       Color="#FF111620"/>  <!-- info chip background -->
+        <SolidColorBrush x:Key="ChipBorder"   Color="#FF1C2535"/>  <!-- info chip border -->
         <FontFamily x:Key="Ui">Segoe UI, Arial</FontFamily>
         <FontFamily x:Key="Mono">Cascadia Code, Consolas, Courier New</FontFamily>
 
@@ -65,14 +65,11 @@
         </Style>
     </Window.Resources>
 
-    <!-- Root glass border -->
+    <!-- Root border — solid, no shadow, no blur -->
     <Border CornerRadius="12"
             Background="{StaticResource WinBg}"
-            BorderBrush="#22AABBFF"
+            BorderBrush="#FF1C2535"
             BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect Color="#000" BlurRadius="40" ShadowDepth="0" Opacity="0.85"/>
-        </Border.Effect>
 
         <Grid>
             <Grid.RowDefinitions>
@@ -109,7 +106,7 @@
 
                     <!-- Phase chip (centre) -->
                     <Border Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Background="#FF1A2240" CornerRadius="4" Padding="10,3">
+                            Background="#FF111820" CornerRadius="4" Padding="10,3">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock x:Name="PhaseChip" Text="Ground"
                                        FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
@@ -212,7 +209,7 @@
             <!-- ═══ INFO BAR — BeyondATC style chips ══════════════════════════ -->
             <Border Grid.Row="2"
                     Background="{StaticResource InfoBg}"
-                    BorderBrush="#18AABBFF" BorderThickness="0,1,0,1"
+                    BorderBrush="#FF1C2535" BorderThickness="0,1,0,1"
                     Padding="8,10">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -274,7 +271,7 @@
                     Background="{StaticResource FooterBg}"
                     CornerRadius="0,0,12,12"
                     Padding="12,7"
-                    BorderBrush="#15AABBFF" BorderThickness="0,1,0,0">
+                    BorderBrush="#FF1C2535" BorderThickness="0,1,0,0">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -302,7 +299,7 @@
                     <!-- PTT key hint -->
                     <Border Grid.Column="2" x:Name="PttIndicator"
                             CornerRadius="4" Padding="10,3"
-                            BorderThickness="1" BorderBrush="#22334DA6"
+                            BorderThickness="1" BorderBrush="#FF1C2535"
                             Background="Transparent">
                         <TextBlock x:Name="PttLabel" Text="CAPS  PTT"
                                    FontFamily="{StaticResource Mono}"
