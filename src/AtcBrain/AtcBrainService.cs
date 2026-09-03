@@ -446,10 +446,29 @@ public class AtcBrainService
             _ => "You are ATC. Issue appropriate clearances."
         };
 
-        // Lean system prompt when SimConnect is disconnected (saves tokens)
+        // ── Hallucination guard ───────────────────────────────────────────────
+        // If no real airport data is available, forbid the LLM from inventing
+        // runways, taxiways, frequencies or weather. This is critical for safety
+        // — a pilot following a false clearance in MSFS will get confused.
+        var dataGuard = string.Empty;
+        bool hasRealAirportData = state.IsConnected &&
+            !string.IsNullOrWhiteSpace(state.NearestAirportIcao);
+
+        if (!hasRealAirportData)
+        {
+            dataGuard = """
+
+                ⚠ DATA WARNING: No real airport data is available right now.
+                DO NOT invent or assume: runway numbers, taxiway names, frequencies,
+                QNH, wind, or any airport-specific information.
+                Instead say: "[callsign], stand by, data unavailable — confirm airport ICAO."
+                Only respond to basic radio checks and startup requests generically.
+                """;
+        }
+
         var simContext = state.IsConnected
             ? state.ToContextString()
-            : "SIM: Not connected. Respond to basic radio checks and startup requests normally.";
+            : "SIM: Not connected. Only respond to basic radio checks generically.";
 
         return $"""
             You are a professional {controllerRole} ATC controller. Replace the MSFS default ATC.
@@ -463,7 +482,7 @@ public class AtcBrainService
             5. Wind: "[degrees] at [speed] knots".
             6. If read-back is wrong, say "Negative, [callsign], [correct value], say again."
             7. Radio check → "5 by 5" or "reading you loud and clear".
-
+            {dataGuard}
             PHASE: {controllerRole}
             {phaseInstructions}
 

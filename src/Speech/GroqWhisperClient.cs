@@ -155,6 +155,41 @@ public class GroqWhisperClient
         s = System.Text.RegularExpressions.Regex.Replace(s,
             @"(?<!\d)5[\s\-]?[Ff]\b(?!\d)", "fife");
 
+        // ── NATO phonetic alphabet → letters ───────────────────────────────────
+        // When a pilot spells a callsign like "Alpha Bravo Charlie" the LLM and
+        // flight log should show "A B C". We map each phonetic word to its letter.
+        // We only replace whole words (word boundaries) to avoid partial matches.
+        var phoneticMap = new[]
+        {
+            ("alpha",   "A"), ("bravo",   "B"), ("charlie", "C"), ("delta",   "D"),
+            ("echo",    "E"), ("foxtrot", "F"), ("golf",    "G"), ("hotel",   "H"),
+            ("india",   "I"), ("juliet",  "J"), ("kilo",    "K"), ("lima",    "L"),
+            ("mike",    "M"), ("november","N"), ("oscar",   "O"), ("papa",    "P"),
+            ("quebec",  "Q"), ("romeo",   "R"), ("sierra",  "S"), ("tango",   "T"),
+            ("uniform", "U"), ("victor",  "V"), ("whiskey", "W"), ("xray",    "X"),
+            ("yankee",  "Y"), ("zulu",    "Z"),
+        };
+
+        // Only convert phonetics that appear AFTER the callsign separator
+        // (i.e., after airport + controller + callsign prefix) to avoid converting
+        // "Ground" → "G" or "India" in "Air India" etc.
+        // Strategy: if a phonetic word appears as part of a standalone letter-spelling
+        // sequence (2+ consecutive phonetics), convert all of them.
+        // Regex: 2 or more consecutive phonetic words → replace each with its letter.
+        var phoneticPattern = string.Join("|", phoneticMap.Select(p => p.Item1));
+        var groupPattern = $@"\b(?:{phoneticPattern})\b(?:\s+\b(?:{phoneticPattern})\b)+";
+        s = System.Text.RegularExpressions.Regex.Replace(s, groupPattern, match =>
+        {
+            var words2 = match.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var letters = words2.Select(w =>
+            {
+                var entry = phoneticMap.FirstOrDefault(p =>
+                    string.Equals(p.Item1, w, StringComparison.OrdinalIgnoreCase));
+                return entry.Item2 ?? w;
+            });
+            return string.Join(" ", letters);
+        }, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
         return s;
     }
 }

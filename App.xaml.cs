@@ -129,11 +129,21 @@ public partial class App : Application
         _simBridge.Connected += () =>
         {
             _overlay.UpdateSimState(_simBridge.CurrentState);
-            // Generate ATIS once on connect (only once per session)
             if (!_atisGenerated)
             {
                 _atisGenerated = true;
-                _ = Task.Delay(3000).ContinueWith(_ => GenerateAtis(_simBridge.CurrentState));
+                // Wait for SimConnect Facilities API to populate airport data (takes 3-10s).
+                // Poll every second for up to 15s, then fire with whatever we have.
+                _ = Task.Run(async () =>
+                {
+                    for (int i = 0; i < 15; i++)
+                    {
+                        await Task.Delay(1000);
+                        var s = _simBridge.CurrentState;
+                        if (!string.IsNullOrWhiteSpace(s.NearestAirportIcao)) break;
+                    }
+                    GenerateAtis(_simBridge.CurrentState);
+                });
             }
         };
         _simBridge.Disconnected += () =>
@@ -332,6 +342,7 @@ public partial class App : Application
 
             _overlay.AddPilotMessage(transcript);
             AppendFlightLog("YOU", transcript);
+            _triggers.NotifyPilotSpoke();   // unlock auto-triggers after first real radio call
 
             // Callsign detection
             _atcBrain.TryExtractCallsign(transcript);

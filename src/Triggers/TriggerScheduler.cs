@@ -28,9 +28,13 @@ public class TriggerScheduler : IDisposable
     private bool _wasOnGround = true;
     private int _stationarySeconds;
 #pragma warning disable CS0169
-    private bool _enginesRunningDetected; // reserved for future SimVar-based engine detection
+    private bool _enginesRunningDetected;
 #pragma warning restore CS0169
     private double _assignedAltitudeFt = -1;
+
+    // Safety guard: never fire auto-triggers before pilot has pressed PTT at least once.
+    // Prevents phantom phase changes when MSFS loads with aircraft already at gate.
+    private bool _pilotHasSpoken = false;
 
 
     // Fired when the scheduler wants ATC to speak unprompted
@@ -54,10 +58,14 @@ public class TriggerScheduler : IDisposable
         _lastState = state;
     }
 
+    /// <summary>Call this after every successful PTT transcription so auto-triggers unlock.</summary>
+    public void NotifyPilotSpoke() => _pilotHasSpoken = true;
+
     private void Poll(object? _)
     {
         var state = _lastState;
         if (state == null || !state.IsConnected) return;
+        if (!_pilotHasSpoken) return;   // wait for first real radio call
 
         try
         {
