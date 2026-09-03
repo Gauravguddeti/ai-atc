@@ -38,6 +38,8 @@ public class VoicePipeline : IDisposable
     // Events published to the rest of the app
     public event Action<VoiceState>? StateChanged;
     public event Func<byte[], Task>? AudioCaptured; // raw WAV bytes ready for STT
+    public event Action? PttPressed;                // fires when PTT key goes down (IDLE)
+    public event Action? PttReleased;               // fires when PTT key goes up (RECORDING)
 
     public VoiceState State
     {
@@ -63,10 +65,11 @@ public class VoicePipeline : IDisposable
             if (_state != VoiceState.Idle)
             {
                 _logger.LogDebug("PTT key-down ignored — state is {State}", _state);
-                return; // already recording, processing, or speaking
+                return;
             }
             TransitionTo(VoiceState.Recording);
         }
+        PttPressed?.Invoke();  // fire click AFTER transitioning to Recording
         StartCapture();
     }
 
@@ -84,6 +87,7 @@ public class VoicePipeline : IDisposable
             }
             TransitionTo(VoiceState.Processing);
         }
+        PttReleased?.Invoke();  // fire release click immediately
         StopCaptureAndSend();
     }
 

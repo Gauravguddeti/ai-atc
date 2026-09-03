@@ -225,7 +225,62 @@ public partial class OverlayWindow : Window
     {
         // System messages are NOT shown in the chat (keeps UI clean like BeyondATC).
         // They are written to the log file only by the caller via ILogger.
-        // If a visible toast is ever needed, add it to the footer label here.
+    }
+
+    // ─── Typing indicator ─────────────────────────────────────────────────────
+
+    private ChatEntry? _typingEntry;
+    private System.Threading.Timer? _typingTimer;
+    private int _typingDots = 1;
+
+    public void ShowTypingIndicator(bool show)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (show)
+            {
+                if (_typingEntry != null) return; // already showing
+                _typingEntry = new ChatEntry
+                {
+                    Prefix      = "ATC",
+                    Text        = "·",
+                    PrefixColor = _atcBrush,
+                    TextColor   = _atcBrush,
+                };
+                _chatEntries.Add(_typingEntry);
+                ChatScroll.ScrollToBottom();
+
+                _typingDots = 1;
+                _typingTimer = new System.Threading.Timer(_ =>
+                {
+                    Dispatcher.InvokeAsync(() =>
+                    {
+                        if (_typingEntry == null) return;
+                        _typingDots = (_typingDots % 3) + 1;
+                        _typingEntry.Text = new string('·', _typingDots);
+                        // Force UI refresh (ChatEntry needs INotifyPropertyChanged for this,
+                        // so we remove+re-add for simplicity)
+                        var idx = _chatEntries.IndexOf(_typingEntry);
+                        if (idx >= 0)
+                        {
+                            _chatEntries.RemoveAt(idx);
+                            _chatEntries.Insert(idx, _typingEntry);
+                            ChatScroll.ScrollToBottom();
+                        }
+                    });
+                }, null, 400, 400);
+            }
+            else
+            {
+                _typingTimer?.Dispose();
+                _typingTimer = null;
+                if (_typingEntry != null)
+                {
+                    _chatEntries.Remove(_typingEntry);
+                    _typingEntry = null;
+                }
+            }
+        });
     }
 
     private void TrimAndScroll()

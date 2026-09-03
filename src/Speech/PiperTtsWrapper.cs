@@ -35,6 +35,51 @@ public class PiperTtsWrapper
         File.Exists(_piperExePath) && File.Exists(_modelPath);
 
     /// <summary>
+    /// Generates a short radio squelch click tone as WAV bytes.
+    /// This is a 40ms burst of a 1200 Hz sine wave with a fast attack/decay envelope,
+    /// matching the characteristic sound of a VHF radio PTT click.
+    /// No external file needed — generated procedurally.
+    /// </summary>
+    public static byte[] GenerateClickWav()
+    {
+        const int sampleRate = 22050;
+        const int durationMs = 35;        // 35ms click — authentic radio squelch length
+        const double freq    = 1200.0;    // 1200 Hz carrier — matches VHF radio squelch
+        const double peakAmp = 0.35;      // not too loud
+
+        int numSamples = sampleRate * durationMs / 1000;
+        var pcm = new short[numSamples];
+
+        for (int i = 0; i < numSamples; i++)
+        {
+            // Attack: 0→1 in first 10%, decay: 1→0 in last 30%
+            double t = (double)i / numSamples;
+            double envelope = t < 0.1 ? t / 0.1
+                            : t > 0.7 ? (1.0 - t) / 0.3
+                            : 1.0;
+            double sample = Math.Sin(2 * Math.PI * freq * i / sampleRate);
+            pcm[i] = (short)(sample * envelope * peakAmp * short.MaxValue);
+        }
+
+        // Wrap in WAV container
+        using var ms  = new MemoryStream();
+        using var bw  = new BinaryWriter(ms);
+        int dataLen   = pcm.Length * 2;
+        int byteRate  = sampleRate * 1 * 16 / 8;
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+        bw.Write(36 + dataLen);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("fmt "));
+        bw.Write(16); bw.Write((short)1); bw.Write((short)1);
+        bw.Write(sampleRate); bw.Write(byteRate);
+        bw.Write((short)(1 * 16 / 8)); bw.Write((short)16);
+        bw.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+        bw.Write(dataLen);
+        foreach (var s in pcm) bw.Write(s);
+        return ms.ToArray();
+    }
+
+    /// <summary>
     /// Synthesizes <paramref name="text"/> and returns WAV bytes ready for the radio filter and playback.
     /// Returns null if Piper is unavailable or synthesis fails.
     /// </summary>
@@ -50,8 +95,13 @@ public class PiperTtsWrapper
         {
             var psi = new ProcessStartInfo
             {
-                FileName = _piperExePath,
-                Arguments = $"--model \"{_modelPath}\" --output-raw",
+                FileName  = _piperExePath,
+                // Voice quality flags:
+                //   --length-scale 1.05  → 5% slower than default (more natural cadence)
+                //   --noise-scale 0.4    → reduces robotic artefacts
+                //   --noise-w 0.7        → smooths prosody variation
+                Arguments = $"--model \"{_modelPath}\" --output-raw " +
+                            "--length-scale 1.05 --noise-scale 0.4 --noise-w 0.7",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,

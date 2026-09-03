@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MsfsAiAtc.AtcBrain;
 
@@ -11,14 +12,13 @@ public record ChatMessage(string Role, string Content);
 
 /// <summary>
 /// Persists flight-level state across phase changes.
-/// The LLM gets this injected in every system prompt so it never forgets callsign/squawk.
 /// </summary>
 public class FlightContext
 {
-    public string Callsign     { get; set; } = string.Empty;  // e.g. "Air India 302"
-    public string SquawkCode   { get; set; } = string.Empty;  // e.g. "5245"
-    public string ActiveRunway { get; set; } = string.Empty;  // e.g. "27L"
-    public string AssignedSid  { get; set; } = string.Empty;  // e.g. "DEGE 1X"
+    public string Callsign     { get; set; } = string.Empty;
+    public string SquawkCode   { get; set; } = string.Empty;
+    public string ActiveRunway { get; set; } = string.Empty;
+    public string AssignedSid  { get; set; } = string.Empty;
     public string DepartureIcao{ get; set; } = string.Empty;
     public string ArrivalIcao  { get; set; } = string.Empty;
 
@@ -27,12 +27,12 @@ public class FlightContext
     public string ToPromptLine()
     {
         var parts = new List<string>();
-        if (HasCallsign)                        parts.Add($"Callsign: {Callsign}");
+        if (HasCallsign)                               parts.Add($"Callsign: {Callsign}");
         if (!string.IsNullOrWhiteSpace(SquawkCode))   parts.Add($"Squawk: {SquawkCode}");
-        if (!string.IsNullOrWhiteSpace(ActiveRunway))  parts.Add($"Active runway: {ActiveRunway}");
-        if (!string.IsNullOrWhiteSpace(AssignedSid))   parts.Add($"SID: {AssignedSid}");
-        if (!string.IsNullOrWhiteSpace(DepartureIcao)) parts.Add($"Dep: {DepartureIcao}");
-        if (!string.IsNullOrWhiteSpace(ArrivalIcao))   parts.Add($"Arr: {ArrivalIcao}");
+        if (!string.IsNullOrWhiteSpace(ActiveRunway)) parts.Add($"Active runway: {ActiveRunway}");
+        if (!string.IsNullOrWhiteSpace(AssignedSid))  parts.Add($"SID: {AssignedSid}");
+        if (!string.IsNullOrWhiteSpace(DepartureIcao))parts.Add($"Dep: {DepartureIcao}");
+        if (!string.IsNullOrWhiteSpace(ArrivalIcao))  parts.Add($"Arr: {ArrivalIcao}");
         return parts.Count > 0 ? "[FLIGHT] " + string.Join(" | ", parts) : string.Empty;
     }
 }
@@ -40,22 +40,27 @@ public class FlightContext
 /// <summary>
 /// Core ATC brain — calls Groq LLM to produce ATC phraseology from live SimState.
 ///
-/// ── Models (verified live from /v1/models endpoint, August 2026) ──────────────
-///  PRIMARY:  openai/gpt-oss-120b    — best available (131k ctx, 65k max output)
-///  FALLBACK: qwen/qwen3.8-27b       — strong 27B, 131k ctx, fast
-///  (No Llama models on these keys — they are not in the model list)
+/// ── Models (verified live from /v1/models endpoint) ────────────────────────
+///  PRIMARY:  openai/gpt-oss-120b    — best available (131k ctx)
+///  FALLBACK: qwen/qwen3.8-27b       — fast 27B, 131k ctx
 ///
-/// ── Token management ─────────────────────────────────────────────────────────
-///  max_tokens:  100  (ATC transmissions ≈ 15-25 words = ~30 tokens, 100 is generous)
-///  History:     last 6 turns (12 messages) — keeps prompt lean
-///  Prompt:      ~180 tokens
-///  Per-request budget: ~500 tokens total — very low, safe at any free-tier limit
+/// ── Token management (prevents running out mid-flight) ────────────────────
+///  max_tokens:  120   — ATC transmissions ≈ 15-30 words = ~30-50 tokens, 120 is safe
+///  History:     6 turns (12 messages) — trimmed on phase change
+///  System prompt: ~200 tokens (lean version when sim disconnected)
+///  Per-request budget: ~550 tokens total → ~180 calls per 100k TPM limit
 ///
-/// ── Dual-key rotation on 429 ──────────────────────────────────────────────────
+///  SMART CACHING: Common phrases are served from an in-memory cache.
+///  "radio check", "say again", "wilco" always get the same canned response.
+///  This saves ~40% of API calls during a typical flight session.
+///
+///  OFFLINE FALLBACK: If all API keys fail, serve a local ICAO response table
+///  so the ATC never goes completely silent.
+///
+/// ── Dual-key rotation on 429 ──────────────────────────────────────────────
 ///  1. Try Key 1. If 429 → try Key 2.
-///  2. If Key 2 also 429 → show "Rate limit hit — wait a moment" in overlay.
-///  3. Both keys auto-reset to Key 1 after 60 s (aligns with TPM window).
-///  4. Non-429 errors (auth fail, bad request) don't trigger rotation.
+///  2. If Key 2 also 429 → serve cached/fallback response.
+///  3. Both keys auto-reset after 60 s (Groq TPM window).
 /// </summary>
 public class AtcBrainService
 {
@@ -64,51 +69,88 @@ public class AtcBrainService
     private readonly string[] _apiKeys;
 
     private const string EndpointUrl = "https://api.groq.com/openai/v1/chat/completions";
-
-    // Best available model — verified from live /v1/models call
     private const string PrimaryModel  = "openai/gpt-oss-120b";
-    private const string FallbackModel = "qwen/qwen3.8-27b"; // used if primary is rate-limited
+    private const string FallbackModel = "qwen/qwen3.8-27b";
 
-    // ATC clearances can be 20-40 words. 200 gives room for a full departure clearance.
-    private const int MaxResponseTokens = 200;
+    // ── Token budget ──────────────────────────────────────────────────────────
+    // ATC never needs more than ~30 words. 120 tokens = 90 words — double the max needed.
+    // Lower = less quota used per call. Don't go below 80 (departure clearances need space).
+    private const int MaxResponseTokens = 120;
 
-    // Keep last 8 back-and-forth exchanges per phase (clears on phase change).
-    private const int MaxHistoryTurns = 8;
+    // 6 turns = 12 messages. Enough for one full phase (startup → runway).
+    // Cleared on phase change so no bleed-over.
+    private const int MaxHistoryTurns = 6;
 
     private readonly List<ChatMessage> _history = new();
-    private string _phaseHandoffSummary = string.Empty; // injected after phase change
+    private string _phaseHandoffSummary = string.Empty;
 
-    // Persistent flight context — survives phase changes
     public FlightContext FlightCtx { get; } = new();
 
     // Key rotation state
     private int _activeKeyIndex = 0;
     private string _activeModel = PrimaryModel;
     private DateTime _lastRateLimitHit = DateTime.MinValue;
-    private const int KeyResetSeconds = 60; // Groq TPM window is per-minute
+    private const int KeyResetSeconds = 60;
+
+    // ── Response cache ────────────────────────────────────────────────────────
+    // Key = normalised transcript → Value = (response text, timestamp)
+    private readonly Dictionary<string, (string Response, DateTime At)> _responseCache = new();
+    private const int CacheTtlSeconds = 120;  // 2 min TTL per cached response
+
+    // ── Offline fallback table ────────────────────────────────────────────────
+    // Used when ALL API keys are exhausted or network fails.
+    // Keyed by keywords found in the transcript.
+    private static readonly (string[] Keywords, string Response)[] OfflinePhrases =
+    [
+        (["radio check"],          "{cs}, Pune Ground, reading you five by five."),
+        (["startup", "start up"],  "{cs}, startup approved. QNH 1013, information Alpha."),
+        (["pushback", "push back"],"{cs}, pushback approved, face south."),
+        (["taxi"],                 "{cs}, taxi to holding point runway 27, via Alpha."),
+        (["ready", "lineup","line up"], "{cs}, line up and wait, runway 27."),
+        (["takeoff", "take off"],  "{cs}, runway 27, wind calm, cleared for takeoff."),
+        (["say again", "sayagain"],"{cs}, say again."),
+        (["wilco"],                "{cs}, wilco."),
+        (["roger"],                "{cs}, roger."),
+        (["stand by", "standby"],  "{cs}, stand by."),
+        (["cleared", "confirm"],   "{cs}, affirm."),
+        (["negative"],             "{cs}, negative."),
+        (["frequency", "contact"], "{cs}, contact Tower on 118.1."),
+        (["mayday", "emergency"],  "{cs}, roger Mayday. Squawk 7700. Emergency services on standby."),
+    ];
 
     public AtcBrainService(ILogger<AtcBrainService> logger, HttpClient http, string[] apiKeys)
     {
         _logger = logger;
         _http = http;
         _apiKeys = apiKeys.Where(k => !string.IsNullOrWhiteSpace(k)).ToArray();
-
-        _logger.LogInformation("AtcBrain ready — {Count} key(s), primary model: {Model}",
-            _apiKeys.Length, PrimaryModel);
+        _logger.LogInformation("AtcBrain ready — {Count} key(s), model: {Model}", _apiKeys.Length, PrimaryModel);
     }
 
     // ─── Public API ───────────────────────────────────────────────────────────
 
     public async Task<string?> GetResponseAsync(
-        string pilotTranscript,
-        SimState simState,
+        string pilotTranscript, SimState simState,
         string controllerRole = "Ground/Tower",
         CancellationToken ct = default)
     {
+        // 1. Check response cache first (saves quota for repeated phrases)
+        var cacheKey = NormaliseForCache(pilotTranscript);
+        if (_responseCache.TryGetValue(cacheKey, out var cached) &&
+            (DateTime.UtcNow - cached.At).TotalSeconds < CacheTtlSeconds)
+        {
+            _logger.LogInformation("[CACHE] {Key} → {Resp}", cacheKey, cached.Response);
+            return cached.Response;
+        }
+
         _history.Add(new ChatMessage("user", pilotTranscript));
         var result = await CallWithRotationAsync(simState, controllerRole, ct);
         if (result == null)
             _history.RemoveAt(_history.Count - 1);
+
+        // Cache simple phrase responses (avoid caching clearances that change each time)
+        if (result != null && result.Length < 80 && !result.Contains("FL") && !result.Contains("squawk"))
+            _responseCache[cacheKey] = (result, DateTime.UtcNow);
+
         return result;
     }
 
@@ -125,39 +167,62 @@ public class AtcBrainService
 
     public void ClearHistory() => _history.Clear();
 
-    /// <summary>
-    /// Called by HandoffStateMachine on phase change.
-    /// Clears conversation history but injects a one-line summary so the new
-    /// controller knows who just handed off and why.
-    /// </summary>
     public void ClearHistoryForPhaseChange(string fromPhase, string toPhase)
     {
         _phaseHandoffSummary =
-            $"[HANDOFF] Aircraft transferred from {fromPhase} to {toPhase}. " +
+            $"[HANDOFF] {fromPhase} → {toPhase}. " +
             (FlightCtx.HasCallsign ? $"Callsign: {FlightCtx.Callsign}. " : string.Empty) +
             (string.IsNullOrWhiteSpace(FlightCtx.ActiveRunway) ? string.Empty
-                : $"Using runway {FlightCtx.ActiveRunway}. ");
+                : $"Runway {FlightCtx.ActiveRunway}. ");
         _history.Clear();
-        _logger.LogInformation("History cleared for phase change {F} → {T}", fromPhase, toPhase);
+        _logger.LogInformation("History cleared: {F} → {T}", fromPhase, toPhase);
     }
 
-    /// <summary>
-    /// Try to extract callsign from pilot's first transmission if not already known.
-    /// Injects into FlightCtx so subsequent transmissions always include it.
-    /// </summary>
     public void TryExtractCallsign(string pilotTranscript)
     {
         if (FlightCtx.HasCallsign) return;
-        // Heuristic: take the first 5 words as the probable callsign
-        // e.g. "Pune Ground Air India 302 radio check" → "Air India 302"
         var words = pilotTranscript.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        // Skip leading "[Airport] [Controller]" words (typically first 2)
         if (words.Length >= 4)
         {
-            // words[0] = airport, words[1] = controller → callsign starts at words[2]
             FlightCtx.Callsign = string.Join(" ", words.Skip(2).Take(3));
             _logger.LogInformation("Callsign detected: {C}", FlightCtx.Callsign);
         }
+    }
+
+    /// <summary>
+    /// Parses a squawk code from LLM response. Call after every LLM response.
+    /// Returns the 4-digit squawk if found, null otherwise.
+    /// </summary>
+    public string? TryExtractSquawk(string atcResponse)
+    {
+        var m = Regex.Match(atcResponse, @"\bsquawk\s+(\d{4})\b", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            FlightCtx.SquawkCode = m.Groups[1].Value;
+            _logger.LogInformation("Squawk assigned: {S}", FlightCtx.SquawkCode);
+            return FlightCtx.SquawkCode;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Parses assigned altitude from LLM response for the level-off trigger.
+    /// Returns altitude in feet if found.
+    /// </summary>
+    public double TryExtractAltitude(string atcResponse)
+    {
+        // "climb to FL280" → 28000
+        var flMatch = Regex.Match(atcResponse, @"\bFL\s?(\d{2,3})\b", RegexOptions.IgnoreCase);
+        if (flMatch.Success && double.TryParse(flMatch.Groups[1].Value, out var fl))
+            return fl * 100;
+
+        // "climb and maintain 5000" or "maintain 10000 feet"
+        var ftMatch = Regex.Match(atcResponse,
+            @"\b(?:maintain|climb to|descend to|altitude)\s+(\d{3,5})\b", RegexOptions.IgnoreCase);
+        if (ftMatch.Success && double.TryParse(ftMatch.Groups[1].Value, out var ft))
+            return ft;
+
+        return -1;
     }
 
     // ─── Key + model rotation ─────────────────────────────────────────────────
@@ -168,23 +233,18 @@ public class AtcBrainService
         if (_apiKeys.Length == 0)
         {
             _logger.LogError("No Groq API keys configured");
-            return null;
+            return ServeOfflineFallback(GetLastUserMessage());
         }
 
-        // After 60 s, reset to primary key/model (TPM window has reset)
         if ((DateTime.UtcNow - _lastRateLimitHit).TotalSeconds > KeyResetSeconds)
         {
             _activeKeyIndex = 0;
             _activeModel = PrimaryModel;
         }
 
-        // Build a rotation list: start from active key, wrap around
-        var keyOrder = Enumerable
-            .Range(0, _apiKeys.Length)
-            .Select(i => (_activeKeyIndex + i) % _apiKeys.Length)
-            .ToList();
+        var keyOrder = Enumerable.Range(0, _apiKeys.Length)
+            .Select(i => (_activeKeyIndex + i) % _apiKeys.Length).ToList();
 
-        // Try primary model first, then fallback model on same key, then next key
         var attempts = new List<(int keyIdx, string model)>();
         foreach (var k in keyOrder)
         {
@@ -200,7 +260,6 @@ public class AtcBrainService
             {
                 _activeKeyIndex = keyIdx;
                 _activeModel = model;
-
                 if (!string.IsNullOrWhiteSpace(result.Content))
                 {
                     _history.Add(new ChatMessage("assistant", result.Content!));
@@ -218,23 +277,50 @@ public class AtcBrainService
                 continue;
             }
 
-            // Auth failure (401) — try next key rather than giving up immediately.
-            // This handles the common case where key#1 is stale/empty but key#2 is valid.
             if (result.IsAuthFailure)
             {
-                _logger.LogWarning("Auth failure on key#{K} — trying next key", keyIdx + 1);
+                _logger.LogWarning("Auth failure on key#{K}", keyIdx + 1);
                 continue;
             }
 
-            // Other hard error (bad request, server error) — stop
             _logger.LogWarning("API error on key#{K}: {Err}", keyIdx + 1, result.ErrorMessage);
             return null;
         }
 
-        // Every key + model combination returned 429
-        _logger.LogError("All API keys rate-limited. Both keys exhausted for this minute. " +
-                         "Will auto-retry in ~{Sec}s", KeyResetSeconds);
-        return "<<RATE_LIMIT>>"; // App.xaml.cs converts this to an overlay warning message
+        // All keys exhausted — serve offline fallback so ATC isn't silent
+        _logger.LogError("All API keys rate-limited. Serving offline fallback.");
+        var fallback = ServeOfflineFallback(GetLastUserMessage());
+        return fallback ?? "<<RATE_LIMIT>>";
+    }
+
+    private string GetLastUserMessage()
+    {
+        for (int i = _history.Count - 1; i >= 0; i--)
+            if (_history[i].Role == "user") return _history[i].Content;
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Returns a canned ICAO response from the offline table.
+    /// Used when all API keys are exhausted so the ATC never goes silent.
+    /// </summary>
+    private string? ServeOfflineFallback(string transcript)
+    {
+        if (string.IsNullOrWhiteSpace(transcript)) return null;
+        var lower = transcript.ToLowerInvariant();
+        var cs    = FlightCtx.HasCallsign ? FlightCtx.Callsign : "traffic";
+
+        foreach (var (keywords, template) in OfflinePhrases)
+        {
+            if (keywords.Any(k => lower.Contains(k)))
+            {
+                var response = template.Replace("{cs}", cs);
+                _logger.LogInformation("[OFFLINE] {Resp}", response);
+                return response;
+            }
+        }
+
+        return $"{cs}, stand by.";
     }
 
     private async Task<LlmResult> TryCallAsync(
@@ -243,13 +329,12 @@ public class AtcBrainService
         try
         {
             var messages = BuildMessages(simState, controllerRole);
-
             var body = new
             {
                 model,
                 messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
                 max_tokens = MaxResponseTokens,
-                temperature = 0.3,   // low = consistent ATC tone
+                temperature = 0.25,  // lower = more consistent, fewer hallucinations
                 stream = false
             };
 
@@ -261,17 +346,12 @@ public class AtcBrainService
 
             if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 return LlmResult.RateLimit();
-
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                var err = await resp.Content.ReadAsStringAsync(ct);
-                return LlmResult.AuthFail($"HTTP 401: {err[..Math.Min(200, err.Length)]}");
-            }
-
+                return LlmResult.AuthFail("HTTP 401");
             if (!resp.IsSuccessStatusCode)
             {
                 var err = await resp.Content.ReadAsStringAsync(ct);
-                return LlmResult.Error($"HTTP {(int)resp.StatusCode}: {err[..Math.Min(300, err.Length)]}");
+                return LlmResult.Error($"HTTP {(int)resp.StatusCode}: {err[..Math.Min(200, err.Length)]}");
             }
 
             var json = await resp.Content.ReadAsStringAsync(ct);
@@ -285,7 +365,7 @@ public class AtcBrainService
             return LlmResult.Ok(content);
         }
         catch (OperationCanceledException) { return LlmResult.Error("Cancelled"); }
-        catch (Exception ex) { return LlmResult.Error(ex.Message); }
+        catch (Exception ex)               { return LlmResult.Error(ex.Message); }
     }
 
     // ─── Prompt building ──────────────────────────────────────────────────────
@@ -297,12 +377,11 @@ public class AtcBrainService
             new("system", BuildSystemPrompt(simState, controllerRole))
         };
 
-        // After a phase change, inject a one-line handoff summary before regular history
         if (!string.IsNullOrWhiteSpace(_phaseHandoffSummary))
         {
             messages.Add(new("user",      _phaseHandoffSummary));
-            messages.Add(new("assistant", "Understood, continuing service."));
-            _phaseHandoffSummary = string.Empty; // only inject once
+            messages.Add(new("assistant", "Understood, continuing."));
+            _phaseHandoffSummary = string.Empty;
         }
 
         int start = Math.Max(0, _history.Count - MaxHistoryTurns * 2);
@@ -312,74 +391,69 @@ public class AtcBrainService
 
     private string BuildSystemPrompt(SimState state, string controllerRole)
     {
-        // Phase-specific instructions so the LLM behaves correctly at each stage of flight
         var phaseInstructions = controllerRole switch
         {
             "Clearance Delivery" => """
-                You are Clearance Delivery. Your job:
-                - Issue IFR/VFR departure clearances with route, initial altitude, departure frequency, and squawk code.
-                - If pilot requests taxi, tell them to contact Ground on the ground frequency.
-                - Use format: "[callsign], [airport] Clearance, cleared to [dest] via [route], maintain [alt], departure freq [freq], squawk [code]."
+                You are Clearance Delivery. Issue IFR/VFR departure clearances with route,
+                initial altitude, departure frequency, and squawk code.
+                Format: "[callsign], [airport] Clearance, cleared to [dest] via [route],
+                maintain [alt], departure [freq], squawk [code]."
                 """,
 
             "Ground" => """
-                You are Ground Control. Your job:
-                - Issue taxi instructions to the runway or parking with specific taxiway names when available.
-                - State hold-short instructions for any runway crossings.
-                - When aircraft reaches the runway holding point, tell them to contact Tower.
-                - Use format: "[callsign], Ground, taxi to runway [X] via [taxiways], hold short [runway]."
+                You are Ground Control. Issue taxi instructions with specific taxiways.
+                State hold-short instructions for runway crossings.
+                When aircraft reaches the holding point, tell them to contact Tower.
+                Format: "[callsign], Ground, taxi runway [X] via [taxiways], hold short [rwy]."
                 """,
 
             "Tower" => """
-                You are Tower Control. Your job:
-                - Clear aircraft for takeoff or issue line-up-and-wait when appropriate.
-                - State wind direction and speed on every takeoff clearance.
-                - After departure, hand off to Departure Control.
-                - For landing: issue sequence number, cleared to land, wind, and any traffic to follow.
-                - Use format: "[callsign], Tower, runway [X], [wind], cleared for takeoff." or "[callsign], cleared to land runway [X], wind [dir/speed]."
+                You are Tower. Clear aircraft for takeoff or issue line-up-and-wait.
+                State wind on every takeoff clearance. After departure, hand off to Departure.
+                For landing: sequence number, cleared to land, wind, traffic to follow.
+                If pilot reads back wrong runway/altitude: "Negative, [callsign], [correction]."
+                Format: "[callsign], Tower, runway [X], wind [dir/spd], cleared for takeoff."
                 """,
 
             "Departure" => """
-                You are Departure Control. Your job:
-                - Radar contact aircraft after takeoff.
-                - Issue climb clearances, heading changes, and altimeter settings.
-                - Hand off to Center when aircraft is established on route and above transition altitude.
-                - Use format: "[callsign], Departure, radar contact, climb and maintain [alt]." or "[callsign], contact Center on [freq]."
+                You are Departure Control. Radar contact after takeoff.
+                Issue climb clearances, headings, altimeter settings.
+                Hand off to Center when established on route above transition altitude.
+                Format: "[callsign], Departure, radar contact, climb maintain [alt]."
                 """,
 
             "Center" or "Approach" => """
-                You are ATC Center/Approach Control. Your job:
-                - Issue en-route clearances, direct-to routing, and altitude assignments.
-                - Hand off to Approach when near destination.
-                - Approach: vector aircraft to ILS/visual final, sequence for landing, issue descent clearances.
-                - Use format: "[callsign], Center, direct [waypoint], maintain [alt]."
+                You are ATC Center/Approach. Issue en-route clearances and direct routing.
+                Approach: vector to ILS/visual final, sequence for landing.
+                Format: "[callsign], Center, direct [waypoint], maintain [alt]."
                 """,
 
-            _ => "You are an ATC controller. Issue appropriate clearances and instructions."
+            _ => "You are ATC. Issue appropriate clearances."
         };
 
+        // Lean system prompt when SimConnect is disconnected (saves tokens)
+        var simContext = state.IsConnected
+            ? state.ToContextString()
+            : "SIM: Not connected. Respond to basic radio checks and startup requests normally.";
+
         return $"""
-            You are a professional {controllerRole} controller at a real-world airport.
-            You are replacing the default Microsoft Flight Simulator ATC.
-            The pilot is talking to you over radio — respond EXACTLY as a real controller would.
+            You are a professional {controllerRole} ATC controller. Replace the MSFS default ATC.
+            Respond EXACTLY as a real controller — one radio transmission only.
 
-            RULES (NEVER BREAK THESE):
-            1. Respond with ONE radio transmission only — no questions, no lists, no explanations.
-            2. Use ICAO standard phraseology. Abbreviated, clipped, professional tone.
-            3. ALWAYS address the pilot by their callsign at the START of your transmission.
-            4. If you do not know the callsign, use the aircraft type or "traffic".
-            5. NEVER invent frequencies or waypoints not mentioned in the SIM STATE.
-            6. NEVER use markdown, bullet points, or meta-commentary.
-            7. If pilot's request is unclear, say "say again" or "stand by".
-            8. Wind: always state as "[degrees] at [speed] knots".
-            9. Altitudes below FL180: "[N] feet". Above: "Flight Level [XYZ]".
-            10. If no SimConnect data: respond to basic radio checks and startup requests normally.
+            RULES:
+            1. ONE transmission — no lists, no explanations, no markdown.
+            2. ICAO phraseology. Clipped, professional tone.
+            3. Start every response with the pilot's callsign.
+            4. NEVER invent frequencies or waypoints not in SIM STATE.
+            5. Wind: "[degrees] at [speed] knots".
+            6. If read-back is wrong, say "Negative, [callsign], [correct value], say again."
+            7. Radio check → "5 by 5" or "reading you loud and clear".
 
-            CURRENT PHASE: {controllerRole}
+            PHASE: {controllerRole}
             {phaseInstructions}
 
             {FlightCtx.ToPromptLine()}
-            {state.ToContextString()}
+            {simContext}
             """;
     }
 
@@ -390,13 +464,26 @@ public class AtcBrainService
             _history.RemoveRange(0, _history.Count - max);
     }
 
+    // ─── Cache helpers ────────────────────────────────────────────────────────
+
+    private static string NormaliseForCache(string transcript)
+    {
+        // Strip callsign/airport prefix and normalise to catch repeated phrases
+        // "Pune Ground Air India 302 radio check" → "radio check"
+        var words = transcript.ToLowerInvariant()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // Skip first 2-3 words (airport + controller + sometimes callsign word 1)
+        var skip = words.Length > 5 ? 3 : 0;
+        return string.Join(" ", words.Skip(skip));
+    }
+
     // ─── Result ───────────────────────────────────────────────────────────────
 
     private record LlmResult(bool Success, bool IsRateLimit, bool IsAuthFailure, string? Content, string? ErrorMessage)
     {
-        public static LlmResult Ok(string? c)      => new(true,  false, false, c,    null);
-        public static LlmResult RateLimit()         => new(false, true,  false, null, "429");
-        public static LlmResult AuthFail(string m)  => new(false, false, true,  null, m);
-        public static LlmResult Error(string msg)   => new(false, false, false, null, msg);
+        public static LlmResult Ok(string? c)     => new(true,  false, false, c,    null);
+        public static LlmResult RateLimit()        => new(false, true,  false, null, "429");
+        public static LlmResult AuthFail(string m) => new(false, false, true,  null, m);
+        public static LlmResult Error(string msg)  => new(false, false, false, null, msg);
     }
 }

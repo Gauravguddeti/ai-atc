@@ -11,6 +11,7 @@ using MsfsAiAtc.Traffic;
 using MsfsAiAtc.Triggers;
 using System.IO;
 using System.Net.Http;
+using System.Text;
 using System.Windows;
 using System.Windows.Interop;
 
@@ -18,7 +19,6 @@ namespace MsfsAiAtc;
 
 /// <summary>
 /// Application entry point and service orchestrator.
-/// Wires together all components and manages their lifecycle.
 /// </summary>
 public partial class App : Application
 {
@@ -44,6 +44,13 @@ public partial class App : Application
 
     private HttpClient _httpClient = null!;
     private CancellationTokenSource _appCts = new();
+
+    // PTT click WAV — generated once at startup
+    private byte[]? _pttClickWav;
+
+    // Flight transcript log — written to disk on exit
+    private readonly StringBuilder _flightLog = new();
+    private bool _atisGenerated = false;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -103,8 +110,13 @@ public partial class App : Application
 
         _voicePipeline = new VoicePipeline(
             _loggerFactory.CreateLogger<VoicePipeline>(), _config.MicDeviceId);
-        _voicePipeline.StateChanged += OnVoiceStateChanged;
-        _voicePipeline.AudioCaptured += OnAudioCaptured;
+        _voicePipeline.StateChanged   += OnVoiceStateChanged;
+        _voicePipeline.AudioCaptured  += OnAudioCaptured;
+
+        // PTT click sound — generated once at startup (no external file needed)
+        _pttClickWav = PiperTtsWrapper.GenerateClickWav();
+        _voicePipeline.PttPressed  += () => _ = _audioPlayer.PlayRawAsync(_pttClickWav!, CancellationToken.None);
+        _voicePipeline.PttReleased += () => _ = _audioPlayer.PlayRawAsync(_pttClickWav!, CancellationToken.None);
 
         _hotkeyHook = new GlobalHotkeyHook(
             _loggerFactory.CreateLogger<GlobalHotkeyHook>(), _config.PushToTalkKey);
@@ -116,11 +128,16 @@ public partial class App : Application
         _simBridge.StateUpdated += OnSimStateUpdated;
         _simBridge.Connected += () =>
         {
-            _overlay.AddSystemMessage("SimConnect: Connected to MSFS ✓");
-            // Immediately update the overlay header (don't wait for first data packet)
             _overlay.UpdateSimState(_simBridge.CurrentState);
+            // Generate ATIS once on connect (only once per session)
+            if (!_atisGenerated)
+            {
+                _atisGenerated = true;
+                _ = Task.Delay(3000).ContinueWith(_ => GenerateAtis(_simBridge.CurrentState));
+            }
         };
-        _simBridge.Disconnected += () => _overlay.AddSystemMessage("SimConnect: Disconnected — retrying...");
+        _simBridge.Disconnected += () =>
+            _loggerFactory.CreateLogger<App>().LogInformation("SimConnect disconnected — retrying...");
 
         // Initialize after overlay is rendered (to get HWND)
         _overlay.ContentRendered += (_, _) =>
@@ -228,7 +245,7 @@ public partial class App : Application
         // MSFS 2020 Official BGLs are in Asobo's proprietary format — our FSX
         // parser gets 0 airports from 6000+ files every time. OurAirports gives
         // us 80k+ worldwide airports loaded in <2 seconds.
-        var appDataDir = Path.Combine(AppContext.BaseDirectory, "data");
+        var appDataDir = Path.Combine(AppRootDir, "data");   // ← fixed: AppRootDir not AppContext.BaseDirectory
         var airportsCsv = Path.Combine(appDataDir, "airports.csv");
         var runwaysCsv  = Path.Combine(appDataDir, "runways.csv");
 
@@ -236,20 +253,15 @@ public partial class App : Application
 
         if (File.Exists(airportsCsv))
         {
-            _overlay.AddSystemMessage("Loading airport database...");
             Task.Run(() =>
             {
                 _ourAirportsDb.Load(airportsCsv, runwaysCsv);
-                Application.Current?.Dispatcher.Invoke(() =>
-                    _overlay.AddSystemMessage(
-                        $"✓ Airport DB ready — {_ourAirportsDb.AirportCount:N0} airports"));
+                logger.LogInformation("Airport DB ready — {Count:N0} airports", _ourAirportsDb.AirportCount);
             });
         }
         else
         {
-            _overlay.AddSystemMessage(
-                "⚠ Airport database not found. " +
-                "Run 'SETUP (Run This First).bat' to download it.");
+            logger.LogWarning("Airport DB not found at {Path} — run SETUP.bat", airportsCsv);
         }
 
         // Discover MSFS installation
@@ -311,57 +323,61 @@ public partial class App : Application
                 return;
             }
 
-            // Step 1b: Reject Whisper hallucinations on silence/background audio.
-            // Whisper sometimes generates these stock phrases when it hears ambient
-            // noise, music, or very short audio that isn't real speech.
             if (IsWhisperHallucination(transcript))
             {
-                var logger = _loggerFactory.CreateLogger<App>();
-                logger.LogWarning("Whisper hallucination rejected: {T}", transcript);
+                _loggerFactory.CreateLogger<App>().LogWarning("Whisper hallucination: {T}", transcript);
                 _voicePipeline.SetIdle();
                 return;
             }
 
             _overlay.AddPilotMessage(transcript);
+            AppendFlightLog("YOU", transcript);
 
-            // Try to detect callsign from first transmission
+            // Callsign detection
             _atcBrain.TryExtractCallsign(transcript);
             if (_atcBrain.FlightCtx.HasCallsign)
                 _overlay.SetCallsign(_atcBrain.FlightCtx.Callsign);
+
+            // Show typing indicator while LLM works
+            _overlay.ShowTypingIndicator(true);
 
             // Step 2: LLM
             var simState = _simBridge.CurrentState;
             var role = _handoff.ControllerRoleLabel;
             var atcResponse = await _atcBrain.GetResponseAsync(transcript, simState, role, ct);
 
+            _overlay.ShowTypingIndicator(false);
+
             if (string.IsNullOrWhiteSpace(atcResponse))
             {
-                var logger = _loggerFactory.CreateLogger<App>();
-                logger.LogWarning("LLM returned empty response for transcript: {T}", transcript);
-                _overlay.AddSystemMessage("[ATC busy — say again]");
+                _loggerFactory.CreateLogger<App>().LogWarning("LLM empty response for: {T}", transcript);
                 _voicePipeline.SetIdle();
                 return;
             }
 
-            // Handle rate-limit sentinel (all keys exhausted)
-            if (atcResponse == "<<RATE_LIMIT>>")
+            // Extract squawk and altitude from response
+            var squawk = _atcBrain.TryExtractSquawk(atcResponse);
+            if (squawk != null)
             {
-                _overlay.AddSystemMessage("⚠ Rate limit hit on all keys — wait ~60s and try again");
-                _voicePipeline.SetIdle();
-                return;
+                _overlay.SetSquawk(squawk);
+                _atcBrain.FlightCtx.SquawkCode = squawk;
             }
+            var assignedAlt = _atcBrain.TryExtractAltitude(atcResponse);
+            if (assignedAlt > 0)
+                _triggers.SetAssignedAltitude(assignedAlt);
 
             _overlay.AddAtcMessage(atcResponse, role.Split('/')[0]);
+            AppendFlightLog(role.Split('/')[0].ToUpper(), atcResponse);
 
-            // Step 3: TTS + playback
+            // Step 3: 0.6s pause (natural controller hesitation) then TTS
+            await Task.Delay(600, ct);
             await SpeakAtcResponse(atcResponse, ct);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            var logger = _loggerFactory.CreateLogger<App>();
-            logger.LogError(ex, "Pipeline error");
-            _overlay.AddSystemMessage($"Error: {ex.Message}");
+            _overlay.ShowTypingIndicator(false);
+            _loggerFactory.CreateLogger<App>().LogError(ex, "Pipeline error");
             _voicePipeline.SetIdle();
         }
     }
@@ -393,24 +409,67 @@ public partial class App : Application
         _voicePipeline.SetSpeaking();
         try
         {
-            // Pre-process ATC text to ICAO phonetics before TTS
-            // e.g. "309" → "tree zero niner", "FL280" → "flight level two eight zero"
-            var ttsText = ToAviationSpeech(text);
+            var ttsText  = ToAviationSpeech(text);
             var wavBytes = await _piperTts.SynthesizeAsync(ttsText, ct);
             if (wavBytes != null)
-            {
                 await _audioPlayer.PlayWithRadioFilterAsync(wavBytes, ct);
-            }
             else
-            {
-                _loggerFactory.CreateLogger<App>().LogWarning("TTS skipped — Piper not available");
                 await Task.Delay(800, ct);
-            }
         }
         finally
         {
             _voicePipeline.SetIdle();
         }
+    }
+
+    // ─── ATIS generation ──────────────────────────────────────────────────────
+    /// <summary>
+    /// Generates a synthetic ATIS from live SimConnect data and shows it as an
+    /// ATC message. Pilots should say "with information Alpha" on first contact.
+    /// </summary>
+    private void GenerateAtis(SimState state)
+    {
+        try
+        {
+            var icao   = state.NearestAirportIcao ?? "unknown";
+            var rwy    = state.ActiveRunway ?? "unknown";
+            var wind   = state.WindSpeedKts < 1
+                ? "calm"
+                : $"{state.WindDirectionDeg:F0} at {state.WindSpeedKts:F0} knots";
+            var qnh    = 1013; // TODO: pull QNH from SimConnect when available
+            var info   = "Alpha";   // always Alpha for now; could cycle A→B→C each session
+
+            var atis = $"{icao} Information {info}. Wind {wind}. Runway {rwy} in use. " +
+                       $"QNH {qnh}. Report information {info} on initial contact.";
+
+            Application.Current?.Dispatcher.Invoke(() =>
+                _overlay.AddAtcMessage(atis, "ATIS"));
+            AppendFlightLog("ATIS", atis);
+            _loggerFactory.CreateLogger<App>().LogInformation("ATIS generated: {A}", atis);
+        }
+        catch (Exception ex)
+        {
+            _loggerFactory.CreateLogger<App>().LogWarning(ex, "ATIS generation failed");
+        }
+    }
+
+    // ─── Flight log ───────────────────────────────────────────────────────────
+    private void AppendFlightLog(string speaker, string text)
+    {
+        var ts = DateTime.Now.ToString("HH:mm:ss");
+        _flightLog.AppendLine($"[{ts}] {speaker.ToUpperInvariant()}: {text}");
+    }
+
+    private void SaveFlightLog()
+    {
+        try
+        {
+            if (_flightLog.Length == 0) return;
+            var path = Path.Combine(AppRootDir, $"flight_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            File.WriteAllText(path, _flightLog.ToString(), System.Text.Encoding.UTF8);
+            _loggerFactory?.CreateLogger<App>().LogInformation("Flight log saved: {P}", path);
+        }
+        catch { /* best effort */ }
     }
 
     /// <summary>
@@ -467,15 +526,14 @@ public partial class App : Application
         var state = _simBridge.CurrentState;
         double freq = to switch
         {
-            ControllerPhase.Ground           => state.GroundFreqMhz,
-            ControllerPhase.Tower            => state.TowerFreqMhz,
+            ControllerPhase.Ground            => state.GroundFreqMhz,
+            ControllerPhase.Tower             => state.TowerFreqMhz,
             ControllerPhase.ClearanceDelivery => state.GroundFreqMhz,
             _ => 0
         };
         _overlay.UpdateControllerPhase(to, freq);
-        // Clear history but inject handoff summary (no chat message — UI is clean)
-        var fromLabel = _handoff.ControllerRoleLabel;
         _atcBrain.ClearHistoryForPhaseChange(from.ToString(), to.ToString());
+        AppendFlightLog("SYSTEM", $"Phase: {from} → {to}");
     }
 
     private async Task OnTriggerFired(string triggerLabel)
@@ -503,6 +561,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _appCts.Cancel();
+        SaveFlightLog();          // write transcript before shutdown
         _hotkeyHook?.Dispose();
         _voicePipeline?.Dispose();
         _simBridge?.Dispose();
