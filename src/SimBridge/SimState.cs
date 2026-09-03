@@ -20,6 +20,19 @@ public class SimState
 
     // Radios
     public double Com1FreqMhz { get; set; }
+    public double Com2FreqMhz { get; set; }
+
+    // Aircraft identity (from SimConnect ATC SimVars — no guessing needed)
+    public string? AircraftId           { get; set; }  // e.g. "VT-ABC"
+    public string? AircraftAirline      { get; set; }  // e.g. "Air India"
+    public string? AircraftFlightNumber { get; set; }  // e.g. "302"
+    public string? AircraftType         { get; set; }  // e.g. "B738"
+
+    /// <summary>Full ATC callsign built from airline + flight number, or just AircraftId.</summary>
+    public string AtcCallsign =>
+        !string.IsNullOrWhiteSpace(AircraftAirline) && !string.IsNullOrWhiteSpace(AircraftFlightNumber)
+            ? $"{AircraftAirline} {AircraftFlightNumber}"
+            : AircraftId ?? "unknown";
 
     // Nearest airport facility (from SimConnect or BGL)
     public string? NearestAirportIcao     { get; set; }
@@ -28,9 +41,9 @@ public class SimState
     public double  NearestAirportElevationFt{ get; set; }
 
     // Frequencies at nearest airport
-    public double TowerFreqMhz { get; set; }
-    public double GroundFreqMhz{ get; set; }
-    public double AtisFreqMhz  { get; set; }
+    public double TowerFreqMhz  { get; set; }
+    public double GroundFreqMhz { get; set; }
+    public double AtisFreqMhz   { get; set; }
 
     // Runways (populated by SimConnect and/or BGL parser)
     public string?          ActiveRunway { get; set; }
@@ -46,6 +59,12 @@ public class SimState
     // Connection health
     public bool     IsConnected  { get; set; }
     public DateTime LastUpdated  { get; set; } = DateTime.MinValue;
+
+    // GPS / flight plan destination
+    public string? GpsDestinationIcao { get; set; }  // e.g. "VABB" (from GPS FLIGHT PLAN WP IDENT)
+
+    // QNH / altimeter
+    public int QnhHpa { get; set; } = 1013;
 
     // ── Phase 3: Airspace context (flight plan + BGL airport layout) ──────────
     /// <summary>
@@ -76,21 +95,33 @@ public class SimState
             return sb.ToString();
         }
 
-        sb.AppendLine($"Aircraft: LAT={LatitudeDeg:F4} LON={LongitudeDeg:F4} HDG={HeadingDegTrue:F0}°");
-        sb.AppendLine($"Altitude: {AltitudeMslFt:F0} ft MSL / {AltitudeAglFt:F0} ft AGL");
-        sb.AppendLine($"Ground Speed: {GroundSpeedKts:F0} kts | On Ground: {OnGround}");
-        sb.AppendLine($"COM1: {Com1FreqMhz:F3} MHz");
-        sb.AppendLine($"Wind: {WindDirectionDeg:F0}° @ {WindSpeedKts:F0} kts");
+        sb.AppendLine($"Aircraft: {AtcCallsign} ({AircraftType ?? "unknown type"})");
+        sb.AppendLine($"  Reg: {AircraftId ?? "unknown"} | Position: LAT={LatitudeDeg:F4} LON={LongitudeDeg:F4} HDG={HeadingDegTrue:F0}°");
+        sb.AppendLine($"  Altitude: {AltitudeMslFt:F0} ft MSL / {AltitudeAglFt:F0} ft AGL");
+        sb.AppendLine($"  Ground Speed: {GroundSpeedKts:F0} kts | On Ground: {OnGround}");
+        sb.AppendLine($"  COM1: {Com1FreqMhz:F3} MHz | COM2: {Com2FreqMhz:F3} MHz");
+        sb.AppendLine($"  Wind: {WindDirectionDeg:F0}° @ {WindSpeedKts:F0} kts");
+        sb.AppendLine($"  QNH: {QnhHpa} hPa");
+
+        if (!string.IsNullOrWhiteSpace(GpsDestinationIcao))
+            sb.AppendLine($"  GPS Destination: {GpsDestinationIcao}");
 
         if (NearestAirportIcao != null)
         {
             sb.AppendLine();
             sb.AppendLine($"Nearest Airport: {NearestAirportIcao} ({NearestAirportName}) — {NearestAirportDistanceNm:F1} nm away, elev {NearestAirportElevationFt:F0} ft");
-            sb.AppendLine($"Frequencies — TWR: {FormatFreq(TowerFreqMhz)} GND: {FormatFreq(GroundFreqMhz)} ATIS: {FormatFreq(AtisFreqMhz)}");
+            sb.AppendLine($"  Frequencies — TWR: {FormatFreq(TowerFreqMhz)} GND: {FormatFreq(GroundFreqMhz)} ATIS: {FormatFreq(AtisFreqMhz)}");
             if (Runways.Count > 0)
-                sb.AppendLine($"Runways: {string.Join(", ", Runways.Select(r => r.Designation))}");
+                sb.AppendLine($"  Runways: {string.Join(", ", Runways.Select(r => r.Designation))}");
             if (ActiveRunway != null)
-                sb.AppendLine($"Active Runway: {ActiveRunway}");
+                sb.AppendLine($"  Active Runway: {ActiveRunway}");
+        }
+        else
+        {
+            sb.AppendLine();
+            sb.AppendLine("⚠ Nearest airport ICAO not yet resolved. " +
+                "Use aircraft COM1 frequency and pilot-stated airport to determine location.");
+            sb.AppendLine($"  COM1 tuned to: {Com1FreqMhz:F3} MHz (use this to infer current ATC freq)");
         }
 
         // Phase 3: Flight plan + airport layout

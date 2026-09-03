@@ -13,6 +13,7 @@ namespace MsfsAiAtc.SimBridge;
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 1)]
 public struct AircraftData
 {
+    // Position & motion
     public double Latitude;
     public double Longitude;
     public double AltitudeMsl;
@@ -20,9 +21,23 @@ public struct AircraftData
     public double HeadingTrue;
     public double GroundSpeed;
     public double SimOnGround;
-    public double Com1Freq;
+    // Weather
     public double WindSpeed;
     public double WindDirection;
+    // Radios
+    public double Com1Freq;    // MHz
+    public double Com2Freq;    // MHz
+    // Identity — read directly from MSFS so we don't need Whisper to guess callsign
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string AtcId;        // e.g. "VT-ABC"
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string AtcAirline;   // e.g. "Air India"
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]  public string AtcFlightNum; // e.g. "302"
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string AtcType;      // e.g. "B738"
+    // Airport context — the single biggest gap in our ATC data
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]  public string AirportIdent; // e.g. "VAPO"
+    // Flight plan destination (GPS)
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 8)]  public string GpsDestIdent; // e.g. "VABB"
+    // Altimeter (for QNH reporting)
+    public double Altimeter;   // inches Hg — multiply by 33.8639 for hPa
 }
 
 /// <summary>
@@ -323,16 +338,27 @@ public class SimConnectBridge : IDisposable
             }
 
             // ── Aircraft data definition ───────────────────────────────────────
-            Add(DefId.AircraftData, "PLANE LATITUDE",                    "degrees", f64);
-            Add(DefId.AircraftData, "PLANE LONGITUDE",                   "degrees", f64);
-            Add(DefId.AircraftData, "PLANE ALTITUDE",                    "feet",    f64);
-            Add(DefId.AircraftData, "PLANE ALT ABOVE GROUND",            "feet",    f64);
-            Add(DefId.AircraftData, "PLANE HEADING DEGREES TRUE",        "degrees", f64);
-            Add(DefId.AircraftData, "GROUND VELOCITY",                   "knots",   f64);
-            Add(DefId.AircraftData, "SIM ON GROUND",                     "bool",    f64);
-            Add(DefId.AircraftData, "COM ACTIVE FREQUENCY:1",            "MHz",     f64);
-            Add(DefId.AircraftData, "AMBIENT WIND VELOCITY",             "knots",   f64);
-            Add(DefId.AircraftData, "AMBIENT WIND DIRECTION",            "degrees", f64);
+            // ORDER MATTERS: struct fields must be added in exact declaration order.
+            Add(DefId.AircraftData, "PLANE LATITUDE",                    "degrees",  f64);
+            Add(DefId.AircraftData, "PLANE LONGITUDE",                   "degrees",  f64);
+            Add(DefId.AircraftData, "PLANE ALTITUDE",                    "feet",     f64);
+            Add(DefId.AircraftData, "PLANE ALT ABOVE GROUND",            "feet",     f64);
+            Add(DefId.AircraftData, "PLANE HEADING DEGREES TRUE",        "degrees",  f64);
+            Add(DefId.AircraftData, "GROUND VELOCITY",                   "knots",    f64);
+            Add(DefId.AircraftData, "SIM ON GROUND",                     "bool",     f64);
+            Add(DefId.AircraftData, "AMBIENT WIND VELOCITY",             "knots",    f64);
+            Add(DefId.AircraftData, "AMBIENT WIND DIRECTION",            "degrees",  f64);
+            Add(DefId.AircraftData, "COM ACTIVE FREQUENCY:1",            "MHz",      f64);
+            Add(DefId.AircraftData, "COM ACTIVE FREQUENCY:2",            "MHz",      f64);
+            // Aircraft identity — avoids guessing callsign from Whisper
+            Add(DefId.AircraftData, "ATC ID",                            "",         str32);
+            Add(DefId.AircraftData, "ATC AIRLINE",                       "",         str32);
+            Add(DefId.AircraftData, "ATC FLIGHT NUMBER",                 "",         str8);
+            Add(DefId.AircraftData, "ATC TYPE",                          "",         str32);
+            // Nearest airport ICAO (the key missing field)
+            Add(DefId.AircraftData, "GPS FLIGHT PLAN WP IDENT",          "",         str8);
+            Add(DefId.AircraftData, "GPS WP NEXT IDENT",                 "",         str8);
+            Add(DefId.AircraftData, "KOHLSMAN SETTING MB",               "millibars",f64);
 
             // RegisterDataDefineStruct<T> can stay as dynamic (generic call, no boxed-object issue)
             _simConnect.RegisterDataDefineStruct<AircraftData>(DefId.AircraftData);
@@ -496,11 +522,39 @@ public class SimConnectBridge : IDisposable
                 _state.HeadingDegTrue   = d.HeadingTrue;
                 _state.GroundSpeedKts   = d.GroundSpeed;
                 _state.OnGround         = d.SimOnGround > 0.5;
-                _state.Com1FreqMhz      = d.Com1Freq;
                 _state.WindSpeedKts     = d.WindSpeed;
                 _state.WindDirectionDeg = d.WindDirection;
+                _state.Com1FreqMhz      = d.Com1Freq;
+                _state.Com2FreqMhz      = d.Com2Freq;
                 _state.SimTime          = DateTime.UtcNow;
                 _state.LastUpdated      = DateTime.UtcNow;
+
+                // Aircraft identity from sim (avoids guessing from Whisper)
+                if (!string.IsNullOrWhiteSpace(d.AtcId))
+                    _state.AircraftId = d.AtcId.Trim();
+                if (!string.IsNullOrWhiteSpace(d.AtcAirline))
+                    _state.AircraftAirline = d.AtcAirline.Trim();
+                if (!string.IsNullOrWhiteSpace(d.AtcFlightNum))
+                    _state.AircraftFlightNumber = d.AtcFlightNum.Trim();
+                if (!string.IsNullOrWhiteSpace(d.AtcType))
+                    _state.AircraftType = d.AtcType.Trim();
+
+                // Airport ICAO from GPS flight plan
+                if (!string.IsNullOrWhiteSpace(d.GpsDestIdent))
+                    _state.GpsDestinationIcao = d.GpsDestIdent.Trim();
+
+                // QNH from altimeter setting
+                if (d.Altimeter > 800 && d.Altimeter < 1100)
+                    _state.QnhHpa = (int)Math.Round(d.Altimeter);
+
+                // Derive airport ICAO from COM1 frequency match via our airport DB
+                // (fallback — the GPS SimVars give us the flight plan ICAO directly)
+                if (string.IsNullOrWhiteSpace(_state.NearestAirportIcao) &&
+                    !string.IsNullOrWhiteSpace(_state.AircraftId))
+                {
+                    // If we have a valid aircraft position, try to populate airport from OurAirports DB
+                    // This is handled by the OurAirportsDb lookup triggered every 5s in App.xaml.cs
+                }
 
                 StateUpdated?.Invoke(_state);
             }

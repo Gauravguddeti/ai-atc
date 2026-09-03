@@ -15,6 +15,7 @@ public class GroqWhisperClient
     private readonly HttpClient _http;
     private readonly string[] _apiKeys;
     private int _keyIndex = 0;
+    private readonly HashSet<int> _blacklistedKeys = new();  // permanently dead 401 keys
     private const string EndpointUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
     // whisper-large-v3 has significantly better accuracy than turbo for domain-specific speech
     private const string Model = "whisper-large-v3";
@@ -63,6 +64,7 @@ public class GroqWhisperClient
         for (int attempt = 0; attempt < _apiKeys.Length; attempt++)
         {
             var idx = (_keyIndex + attempt) % _apiKeys.Length;
+            if (_blacklistedKeys.Contains(idx)) continue;  // skip permanently dead keys
             var key = _apiKeys[idx];
 
             try
@@ -83,13 +85,19 @@ public class GroqWhisperClient
 
                 using var response = await _http.SendAsync(request, ct);
 
-                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-                    response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    // 401 = invalid/expired key. Blacklist permanently.
+                    if (_blacklistedKeys.Add(idx))
+                        _logger.LogWarning("Whisper key#{K} is invalid (401) — blacklisted. Update .env.", idx + 1);
+                    continue;
+                }
+
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
                     var errBody = await response.Content.ReadAsStringAsync(ct);
-                    _logger.LogWarning("Whisper key#{K} error {Status} — trying next key. Body: {B}",
-                        idx + 1, response.StatusCode, errBody);
-                    continue; // try next key
+                    _logger.LogWarning("Whisper key#{K} rate-limited — trying next key.", idx + 1);
+                    continue;
                 }
 
                 if (!response.IsSuccessStatusCode)

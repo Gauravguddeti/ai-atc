@@ -92,6 +92,10 @@ public class AtcBrainService
     private DateTime _lastRateLimitHit = DateTime.MinValue;
     private const int KeyResetSeconds = 60;
 
+    // Dead key blacklist — keys that returned 401 (Invalid API Key) are never retried.
+    // A 429 (rate limit) is temporary; a 401 is permanent for this session.
+    private readonly HashSet<int> _blacklistedKeyIndices = new();
+
     // ── Response cache ────────────────────────────────────────────────────────
     // Key = normalised transcript → Value = (response text, timestamp)
     private readonly Dictionary<string, (string Response, DateTime At)> _responseCache = new();
@@ -258,7 +262,15 @@ public class AtcBrainService
         }
 
         var keyOrder = Enumerable.Range(0, _apiKeys.Length)
-            .Select(i => (_activeKeyIndex + i) % _apiKeys.Length).ToList();
+            .Select(i => (_activeKeyIndex + i) % _apiKeys.Length)
+            .Where(i => !_blacklistedKeyIndices.Contains(i))
+            .ToList();
+
+        if (keyOrder.Count == 0)
+        {
+            _logger.LogWarning("All API keys are blacklisted (invalid). Serving offline fallback.");
+            return ServeOfflineFallback(GetLastUserMessage()) ?? "<<RATE_LIMIT>>";
+        }
 
         var attempts = new List<(int keyIdx, string model)>();
         foreach (var k in keyOrder)
@@ -294,7 +306,10 @@ public class AtcBrainService
 
             if (result.IsAuthFailure)
             {
-                _logger.LogWarning("Auth failure on key#{K}", keyIdx + 1);
+                // 401 = invalid/expired key. Blacklist permanently — never retry this session.
+                if (_blacklistedKeyIndices.Add(keyIdx))
+                    _logger.LogWarning("Key#{K} has an invalid API key — blacklisted for this session. " +
+                        "Update your .env file with a valid Groq key.", keyIdx + 1);
                 continue;
             }
 
