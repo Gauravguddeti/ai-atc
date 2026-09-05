@@ -190,22 +190,65 @@ public class AtcBrainService
     public void TryExtractCallsign(string pilotTranscript)
     {
         if (FlightCtx.HasCallsign) return;
-        var words = pilotTranscript.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length >= 4)
+
+        var words = pilotTranscript.Trim()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length < 2) return;
+
+        // Clean up commas (Whisper often inserts them after callsign elements)
+        var clean = words.Select(w => w.TrimEnd(',', '.')).ToArray();
+
+        // ── Strategy 1: Standard format "Airport Controller, Callsign, ..." ───
+        // "Pune Ground, Air India 302, request..."  → words[2..4]
+        // ATC keywords that appear in words[0] or [1]
+        var atcWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            // words[0] = airport ("Pune"), words[1] = controller ("Ground")
-            // callsign starts at words[2], take up to 3 words
-            var cs = string.Join(" ", words.Skip(2).Take(3));
+            "ground", "tower", "departure", "approach", "center", "delivery",
+            "clearance", "radar", "control", "radio", "atis"
+        };
+        var indiaAirports = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "pune", "mumbai", "delhi", "bangalore", "hyderabad", "chennai",
+            "kolkata", "ahmedabad", "goa", "kochi", "jaipur", "vapo", "vabb",
+            "vidp", "vobl", "vohs", "vomm", "vecc"
+        };
 
-            // Strip Whisper 9R artifacts from stored callsign
-            // e.g. "Air India 309R" → "Air India 309" (R was Whisper's niner artifact)
-            cs = System.Text.RegularExpressions.Regex.Replace(cs,
-                @"(\d)R\b", "$1",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        string? cs = null;
 
-            FlightCtx.Callsign = cs;
-            _logger.LogInformation("Callsign detected: {C}", FlightCtx.Callsign);
+        // Standard: first word is airport/ICAO, second is controller type
+        if (clean.Length >= 4 &&
+            (indiaAirports.Contains(clean[0]) || clean[0].Length == 4) &&
+            atcWords.Contains(clean[1]))
+        {
+            cs = string.Join(" ", clean.Skip(2).Take(3));
         }
+        // Reversed: callsign first, then airport+controller at end
+        // "V T, A B, Charlie, Pune Ground" → take words before the airport keyword
+        else
+        {
+            // Find first word that is an ATC word or airport (working backwards)
+            int atcIdx = -1;
+            for (int i = clean.Length - 1; i >= 1; i--)
+            {
+                if (atcWords.Contains(clean[i]) || indiaAirports.Contains(clean[i]))
+                {
+                    atcIdx = i;
+                    break;
+                }
+            }
+            if (atcIdx > 1)
+                cs = string.Join(" ", clean.Take(atcIdx - 1).TakeLast(4)); // last 4 words before airport
+            else if (clean.Length >= 2)
+                cs = string.Join(" ", clean.Take(3)); // fallback: first 3 words
+        }
+
+        if (string.IsNullOrWhiteSpace(cs)) return;
+
+        // Strip residual comma/period artifacts
+        cs = cs.Trim(',', '.', ' ');
+
+        FlightCtx.Callsign = cs;
+        _logger.LogInformation("Callsign detected (Whisper): {C}", cs);
     }
 
     /// <summary>

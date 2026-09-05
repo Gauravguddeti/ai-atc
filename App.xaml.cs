@@ -302,11 +302,75 @@ public partial class App : Application
 
     // ─── Event handlers ───────────────────────────────────────────────────────
 
+    // Throttle the airport DB lookup — expensive-ish, run every 5 ticks (5 seconds)
+    private int _simUpdateTick = 0;
+
     private void OnSimStateUpdated(SimState state)
     {
         // Update airspace context (flight plan + BGL layout) on every tick
-        // This is cheap — data is already in memory from the cache
         state.AirspaceContext = _airspaceLookup.BuildContextString(state);
+
+        // ── Nearest airport lookup (every 5 seconds) ────────────────────────
+        // OurAirportsDb.NearestTo() is the ONLY code that populates NearestAirportIcao.
+        // Without this, ATIS always says "unknown" and the hallucination guard fires.
+        if (++_simUpdateTick % 5 == 0 &&
+            state.IsConnected &&
+            state.LatitudeDeg != 0 &&
+            state.LongitudeDeg != 0)
+        {
+            if (_ourAirportsDb.IsLoaded)
+            {
+                var nearest = _ourAirportsDb.NearestTo(state.LatitudeDeg, state.LongitudeDeg, 25);
+                if (nearest != null)
+                {
+                    state.NearestAirportIcao        = nearest.Icao;
+                    state.NearestAirportName        = nearest.Name;
+                    state.NearestAirportElevationFt = nearest.ElevFt;
+
+                    // Populate runway list from OurAirports data
+                    state.Runways = nearest.Runways
+                        .Select(r => new MsfsAiAtc.SimBridge.RunwayInfo
+                        {
+                            Designation = r.Designation,
+                            HeadingDeg  = r.HeadingDeg,
+                            LengthFt    = r.LengthFt
+                        }).ToList();
+
+                    // Pick active runway: choose the one most into-wind
+                    if (state.Runways.Count > 0 && state.WindSpeedKts > 2)
+                    {
+                        var best = state.Runways
+                            .OrderBy(r => Math.Abs(
+                                ((r.HeadingDeg - state.WindDirectionDeg + 540) % 360) - 180))
+                            .First();
+                        state.ActiveRunway = best.Designation;
+                    }
+                    else if (state.Runways.Count > 0)
+                    {
+                        state.ActiveRunway ??= state.Runways[0].Designation;
+                    }
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(state.GpsDestinationIcao))
+            {
+                // Airport DB not installed — use GPS flight plan ICAO as best-effort
+                state.NearestAirportIcao ??= state.GpsDestinationIcao;
+            }
+
+            // Auto-set callsign from SimConnect ATC SimVars (more reliable than Whisper)
+            // Only if Whisper hasn't already detected a callsign
+            if (!_atcBrain.FlightCtx.HasCallsign &&
+                !string.IsNullOrWhiteSpace(state.AircraftId))
+            {
+                var simCallsign = !string.IsNullOrWhiteSpace(state.AircraftAirline) &&
+                                  !string.IsNullOrWhiteSpace(state.AircraftFlightNumber)
+                    ? $"{state.AircraftAirline} {state.AircraftFlightNumber}"
+                    : state.AircraftId;
+                _atcBrain.FlightCtx.Callsign = simCallsign;
+                _loggerFactory.CreateLogger<App>().LogInformation(
+                    "Callsign from SimConnect: {C}", simCallsign);
+            }
+        }
 
         _overlay.UpdateSimState(state);
         _handoff.Update(state);
@@ -447,13 +511,24 @@ public partial class App : Application
     {
         try
         {
-            var icao   = state.NearestAirportIcao ?? "unknown";
-            var rwy    = state.ActiveRunway ?? "unknown";
-            var wind   = state.WindSpeedKts < 1
+            // Prefer real ICAO from DB lookup; fall back to GPS dest; then "unknown"
+            var icao = state.NearestAirportIcao
+                    ?? state.GpsDestinationIcao
+                    ?? "unknown";
+
+            // Pick best runway: most into wind, or first runway in DB
+            var rwy = state.ActiveRunway
+                   ?? (state.Runways.Count > 0 ? state.Runways[0].Designation : null)
+                   ?? "unknown";
+
+            var wind = state.WindSpeedKts < 1
                 ? "calm"
                 : $"{state.WindDirectionDeg:F0} at {state.WindSpeedKts:F0} knots";
-            var qnh    = 1013; // TODO: pull QNH from SimConnect when available
-            var info   = "Alpha";   // always Alpha for now; could cycle A→B→C each session
+
+            // Use real QNH from SimConnect (KOHLSMAN SETTING MB SimVar)
+            var qnh = state.QnhHpa > 900 ? state.QnhHpa : 1013;
+
+            var info = "Alpha";
 
             var atis = $"{icao} Information {info}. Wind {wind}. Runway {rwy} in use. " +
                        $"QNH {qnh}. Report information {info} on initial contact.";
